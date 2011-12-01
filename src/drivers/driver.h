@@ -694,6 +694,12 @@ struct wpa_bss_params {
 #define WPA_STA_SHORT_PREAMBLE BIT(2)
 #define WPA_STA_MFP BIT(3)
 
+#ifdef CONFIG_DRIVER_AR6003
+struct device_type {
+  short int categ;
+  short int sub_categ;
+};
+#endif
 /**
  * struct p2p_params - P2P parameters for driver-based P2P management
  */
@@ -703,6 +709,20 @@ struct p2p_params {
 #define DRV_MAX_SEC_DEV_TYPES 5
 	u8 sec_dev_type[DRV_MAX_SEC_DEV_TYPES][8];
 	size_t num_sec_dev_types;
+#ifdef CONFIG_DRIVER_AR6003
+  int go_intent;
+  u8 country[3];
+  u8 reg_class;
+  u8 listen_channel;
+  u8 op_reg_class;
+  u8 op_channel;
+  char device_name[32];
+  u8  uuid[16];
+  struct device_type primary_dev_type;
+  struct device_type secondary_dev_type[DRV_MAX_SEC_DEV_TYPES];
+  u16 config_methods;
+#endif
+
 };
 
 enum tdls_oper {
@@ -1527,6 +1547,13 @@ struct wpa_driver_ops {
 	 * Returns: 0 on success, -1 on failure
 	 */
 	int (*set_freq)(void *priv, struct hostapd_freq_params *freq);
+  /**
+   * get_freq - Set channel/frequency (AP only)
+   * @priv: Private driver interface data
+   * @freq: Channel parameters
+   * Returns: 0 on success, -1 on failure
+   */
+  int (*get_freq)(void *priv);
 
 	/**
 	 * set_rts - Set RTS threshold
@@ -2006,6 +2033,18 @@ struct wpa_driver_ops {
 	 * to speed up various operations.
 	 */
 	const char * (*get_radio_name)(void *priv);
+  int (*p2p_capa_init)(void *priv);
+  /**
+   * p2p_find - Start P2P Device Discovery
+   * @priv: Private driver interface data
+   * @timeout: Timeout for find operation in seconds or 0 for no timeout
+   * @type: Device Discovery type (enum p2p_discovery_type)
+   * Returns: 0 on success, -1 on failure
+   *
+   * This function is only used if the driver implements P2P management,
+   * i.e., if it sets WPA_DRIVER_FLAGS_P2P_MGMT in
+   * struct wpa_driver_capa.
+   */
 
 	/**
 	 * p2p_find - Start P2P Device Discovery
@@ -2030,7 +2069,7 @@ struct wpa_driver_ops {
 	 * struct wpa_driver_capa.
 	 */
 	int (*p2p_stop_find)(void *priv);
-
+  int (*p2p_cancel)(void *priv);
 	/**
 	 * p2p_listen - Start P2P Listen state for specified duration
 	 * @priv: Private driver interface data
@@ -2067,6 +2106,11 @@ struct wpa_driver_ops {
 	int (*p2p_connect)(void *priv, const u8 *peer_addr, int wps_method,
 			   int go_intent, const u8 *own_interface_addr,
 			   unsigned int force_freq, int persistent_group);
+
+  int (*p2p_flush)(void *priv);
+  int (*p2p_auth_go_neg)(void *priv, const u8 *peer_addr, int wps_method,
+			 int go_intent, const u8 *own_interface_addr,
+			 unsigned int force_freq, int persistent_group);
 
 	/**
 	 * wps_success_cb - Report successfully completed WPS provisioning
@@ -2249,6 +2293,20 @@ struct wpa_driver_ops {
 	 * @signal_info: Connection info structure
          */
 	int (*signal_poll)(void *priv, struct wpa_signal_info *signal_info);
+  int (*p2p_group_init)(void *priv, int persistent_group, int group_formation);
+  /**
+   * p2p_set_config - Set P2P related config to the firmware.
+   */
+  int (*p2p_set_config)(void *priv, char *cmd);
+
+  /**
+   * p2p_peer - Get the peer device information.
+   */
+  int (*p2p_peer)(void *priv, char *cmd, char *buf, size_t buflen);
+
+  int (*p2p_get_go_params)(void *priv, const u8 *go_dev_addr, u16 *freq, u8 *ssid, u8* ssid_len);
+
+  int (*p2p_auth_invite)(void *priv, const u8 *auth_peer);
 
 	/**
 	 * set_authmode - Set authentication algorithm(s) for static WEP
@@ -2272,6 +2330,14 @@ struct wpa_driver_ops {
 	 * Returns: 0 on success, -1 on failure
 	 */
 	 int (*driver_cmd)(void *priv, char *cmd, char *buf, size_t buf_len);
+  int (*p2p_get_interface_addr) (void *priv, const u8 *peer_addr, u8 *iface_addr);
+
+  int (*p2p_get_dev_addr) (void *priv, const u8 *peer_addr, u8 *dev_addr);
+
+  int (*p2p_get_ssid_postfix) (void *priv, u8 *ssid, size_t *ssid_len);
+
+  int (*p2p_get_own_info) (void *priv, char *reply_buf, size_t buflen);
+
 };
 
 
@@ -2664,7 +2730,9 @@ enum wpa_event_type {
 	 * internally. Event data is stored in
 	 * union wpa_event_data::p2p_go_neg_completed.
 	 */
-	EVENT_P2P_GO_NEG_COMPLETED,
+        EVENT_P2P_GO_NEG_COMPLETED,
+	EVENT_P2P_INVITATION_SENT_RESULT,
+	EVENT_P2P_INVITATION_RCVD_RESULT,
 
 	EVENT_P2P_PROV_DISC_REQUEST,
 	EVENT_P2P_PROV_DISC_RESPONSE,
@@ -3167,6 +3235,25 @@ union wpa_event_data {
 	struct p2p_go_neg_completed {
 		struct p2p_go_neg_results *res;
 	} p2p_go_neg_completed;
+  /**
+   * struct p2p_invite_sent_result - Data for EVENT_P2P_INVITATION_SENT_RESULT
+   */
+  struct p2p_invite_sent_result {
+    int status;
+    const u8 *bssid;
+  } p2p_invite_sent_result;
+  /**
+   * struct p2p_invite_rcvd_result - Data for EVENT_P2P_INVITATION_RCVD_RESULT
+   */
+  struct p2p_invite_rcvd_result {
+    const u8 *sa;
+    const u8 *bssid;
+    const u8 *ssid;
+    size_t ssid_len;
+    const u8 *go_dev_addr;
+    u8 status;
+    int op_freq;
+  } p2p_invite_rcvd_result;
 
 	struct p2p_prov_disc_req {
 		const u8 *peer;
