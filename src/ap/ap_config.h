@@ -20,7 +20,12 @@
 #include "common/wpa_common.h"
 #include "wps/wps.h"
 
+#ifdef CONFIG_DRIVER_AR6003
+extern const size_t MAX_STA_COUNT;
+#else
 #define MAX_STA_COUNT 2007
+#endif
+
 #define MAX_VLAN_ID 4094
 
 typedef u8 macaddr[ETH_ALEN];

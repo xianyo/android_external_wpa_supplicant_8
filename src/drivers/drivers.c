@@ -27,6 +27,9 @@ extern struct wpa_driver_ops wpa_driver_hostap_ops; /* driver_hostap.c */
 #ifdef CONFIG_DRIVER_MADWIFI
 extern struct wpa_driver_ops wpa_driver_madwifi_ops; /* driver_madwifi.c */
 #endif /* CONFIG_DRIVER_MADWIFI */
+#ifdef CONFIG_DRIVER_AR6003
+extern struct wpa_driver_ops wpa_driver_ar6003_ops; /* driver_ar6003.c */
+#endif /* CONFIG_DRIVER_AR6003 */
 #ifdef CONFIG_DRIVER_BROADCOM
 extern struct wpa_driver_ops wpa_driver_broadcom_ops; /* driver_broadcom.c */
 #endif /* CONFIG_DRIVER_BROADCOM */
@@ -76,6 +79,9 @@ struct wpa_driver_ops *wpa_drivers[] =
 #endif /* CONFIG_DRIVER_HOSTAP */
 #ifdef CONFIG_DRIVER_MADWIFI
 	&wpa_driver_madwifi_ops,
+#endif /* CONFIG_DRIVER_MADWIFI */
+#ifdef CONFIG_DRIVER_AR6003
+        &wpa_driver_ar6003_ops,
 #endif /* CONFIG_DRIVER_MADWIFI */
 #ifdef CONFIG_DRIVER_BROADCOM
 	&wpa_driver_broadcom_ops,

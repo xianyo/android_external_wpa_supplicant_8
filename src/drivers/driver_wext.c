@@ -37,6 +37,11 @@
 #include "driver.h"
 #include "driver_wext.h"
 
+#ifdef ANDROID
+#include <wpa_ctrl.h>
+#include <wpa_supplicant_i.h>
+#include <config_ssid.h>
+#endif
 
 static int wpa_driver_wext_flush_pmkid(void *priv);
 static int wpa_driver_wext_get_range(void *priv);
@@ -44,7 +49,7 @@ static int wpa_driver_wext_finish_drv_init(struct wpa_driver_wext_data *drv);
 static void wpa_driver_wext_disconnect(struct wpa_driver_wext_data *drv);
 static int wpa_driver_wext_set_auth_alg(void *priv, int auth_alg);
 #ifdef ANDROID
-extern int wpa_driver_wext_driver_cmd(void *priv, char *cmd, char *buf,
+static int wpa_driver_wext_driver_cmd(void *priv, const char *cmd, char *buf,
 					size_t buf_len);
 extern int wpa_driver_wext_combo_scan(void *priv,
 					struct wpa_driver_scan_params *params);
@@ -1010,12 +1015,15 @@ int wpa_driver_wext_scan(void *priv, struct wpa_driver_scan_params *params)
 	size_t ssid_len = params->ssids[0].ssid_len;
 
 #ifdef ANDROID
-	if (drv->capa.max_scan_ssids > 1) {
-		ret = wpa_driver_wext_combo_scan(priv, params);
-		goto scan_out;
-	}
+	//	if (drv->capa.max_scan_ssids > 1) {
+	//	ret = wpa_driver_wext_combo_scan(priv, params);
+	//	goto scan_out;
+	//}
 #endif
-
+#ifdef ANDROID
+        struct wpa_supplicant *wpa_s = (struct wpa_supplicant *)(drv->ctx);
+        int scan_probe_flag = 0;
+#endif
 	if (ssid_len > IW_ESSID_MAX_SIZE) {
 		wpa_printf(MSG_DEBUG, "%s: too long SSID (%lu)",
 			   __FUNCTION__, (unsigned long) ssid_len);
@@ -1024,8 +1032,16 @@ int wpa_driver_wext_scan(void *priv, struct wpa_driver_scan_params *params)
 
 	os_memset(&iwr, 0, sizeof(iwr));
 	os_strlcpy(iwr.ifr_name, drv->ifname, IFNAMSIZ);
-
-	if (ssid && ssid_len) {
+#ifdef ANDROID
+        if (wpa_s->prev_scan_ssid != WILDCARD_SSID_SCAN) {
+	  scan_probe_flag = wpa_s->prev_scan_ssid->scan_ssid;
+        }
+        wpa_printf(MSG_DEBUG, "%s: specific scan = %d", __func__,
+		   (scan_probe_flag && (ssid && ssid_len)) ? 1 : 0);
+        if (scan_probe_flag && (ssid && ssid_len)) {
+#else
+	  if (ssid && ssid_len) {
+#endif
 		os_memset(&req, 0, sizeof(req));
 		req.essid_len = ssid_len;
 		req.bssid.sa_family = ARPHRD_ETHER;
@@ -1063,6 +1079,7 @@ scan_out:
 
 	return ret;
 }
+
 
 
 static u8 * wpa_driver_wext_giwscan(struct wpa_driver_wext_data *drv,
@@ -2348,8 +2365,89 @@ static const char * wext_get_radio_name(void *priv)
 	struct wpa_driver_wext_data *drv = priv;
 	return drv->phyname;
 }
+static char *wpa_driver_get_country_code(int channels)
+{
+  char *country = "US"; /* WEXT_NUMBER_SCAN_CHANNELS_FCC */
 
+  if (channels == WEXT_NUMBER_SCAN_CHANNELS_ETSI)
+    country = "EU";
+  else if( channels == WEXT_NUMBER_SCAN_CHANNELS_MKK1)
+    country = "JP";
+  return country;
+}
 
+static int wpa_driver_wext_driver_cmd( void *priv, const char *cmd, char *buf, size_t buf_len )
+{
+  struct wpa_driver_wext_data *drv = priv;
+  struct wpa_supplicant *wpa_s = (struct wpa_supplicant *)(drv->ctx);
+  struct iwreq iwr;
+  int ret = 0, flags;
+  char cmdbuf[128];
+
+  wpa_printf(MSG_DEBUG, "%s %s len = %d", __func__, cmd, buf_len);
+
+  if (!drv->driver_is_started && (os_strcasecmp(cmd, "START") != 0)) {
+    wpa_printf(MSG_ERROR,"WEXT: Driver not initialized yet");
+    return -1;
+  }
+
+  if (os_strcasecmp(cmd, "RSSI-APPROX") == 0) {
+    os_strncpy(cmdbuf, "RSSI", sizeof(cmdbuf));
+    cmd = cmdbuf;
+  } else if( os_strncasecmp(cmd, "SCAN-CHANNELS ", 14) == 0 ) {
+    int no_of_chan;
+
+    no_of_chan = atoi(cmd + 14);
+    os_snprintf(cmdbuf, sizeof(cmdbuf), "COUNTRY %s",
+		wpa_driver_get_country_code(no_of_chan));
+    cmd = cmdbuf;
+  } else if (os_strcasecmp(cmd, "STOP") == 0) {
+    (void) linux_set_iface_flags(drv->ioctl_sock, drv->ifname, 0);
+  } else if( os_strcasecmp(cmd, "RELOAD") == 0 ) {
+    wpa_printf(MSG_DEBUG,"Reload command");
+    wpa_msg(drv->ctx, MSG_INFO, WPA_EVENT_DRIVER_STATE "HANGED");
+    return ret;
+  }
+
+  os_memset(&iwr, 0, sizeof(iwr));
+  os_strncpy(iwr.ifr_name, drv->ifname, IFNAMSIZ);
+  os_memcpy(buf, cmd, strlen(cmd) + 1);
+  iwr.u.data.pointer = buf;
+  iwr.u.data.length = buf_len;
+
+  if ((ret = ioctl(drv->ioctl_sock, SIOCSIWPRIV, &iwr)) < 0) {
+    perror("ioctl[SIOCSIWPRIV]");
+  }
+
+  if (ret < 0) {
+    wpa_printf(MSG_ERROR, "%s failed (%d): %s", __func__, ret, cmd);
+    drv->errors++;
+    if (drv->errors > WEXT_NUMBER_SEQUENTIAL_ERRORS) {
+      drv->errors = 0;
+      wpa_msg(drv->ctx, MSG_INFO, WPA_EVENT_DRIVER_STATE "HANGED");
+    }
+  } else {
+    drv->errors = 0;
+    ret = 0;
+    if ((os_strcasecmp(cmd, "RSSI") == 0) ||
+	(os_strcasecmp(cmd, "LINKSPEED") == 0) ||
+	(os_strcasecmp(cmd, "MACADDR") == 0) ||
+	(os_strcasecmp(cmd, "SCAN-CHANNELS") == 0) ||
+	(os_strcasecmp(cmd, "GETPOWER") == 0) ||
+	(os_strcasecmp(cmd, "GETBAND") == 0)) {
+      ret = strlen(buf);
+    } else if (os_strcasecmp(cmd, "START") == 0) {
+      drv->driver_is_started = TRUE;
+      /* os_sleep(0, WPA_DRIVER_WEXT_WAIT_US);
+	 wpa_msg(drv->ctx, MSG_INFO, WPA_EVENT_DRIVER_STATE "STARTED"); */
+    } else if (os_strcasecmp(cmd, "STOP") == 0) {
+      drv->driver_is_started = FALSE;
+      /* wpa_msg(drv->ctx, MSG_INFO, WPA_EVENT_DRIVER_STATE "STOPPED"); */
+    }
+    wpa_printf(MSG_DEBUG, "%s %s len = %d, %d", __func__, buf, ret, strlen(buf));
+  }
+  return ret;
+}
 const struct wpa_driver_ops wpa_driver_wext_ops = {
 	.name = "wext",
 	.desc = "Linux wireless extensions (generic)",
@@ -2371,7 +2469,7 @@ const struct wpa_driver_ops wpa_driver_wext_ops = {
 	.set_operstate = wpa_driver_wext_set_operstate,
 	.get_radio_name = wext_get_radio_name,
 #ifdef ANDROID
-	.signal_poll = wpa_driver_signal_poll,
+	.signal_poll = NULL,//wpa_driver_signal_poll,
 	.driver_cmd = wpa_driver_wext_driver_cmd,
 #endif
 };
