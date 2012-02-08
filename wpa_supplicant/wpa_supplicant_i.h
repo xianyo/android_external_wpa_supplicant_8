@@ -504,11 +504,13 @@ struct wpa_supplicant {
 	int p2p_wps_method;
 	u8 p2p_auth_invite[ETH_ALEN];
 	int p2p_sd_over_ctrl_iface;
+        int p2p_go_neg_in_progress;
 	int p2p_in_provisioning;
 	int pending_invite_ssid_id;
 	int show_group_started;
 	u8 go_dev_addr[ETH_ALEN];
 	int pending_pd_before_join;
+        int pending_join;
 	u8 pending_join_iface_addr[ETH_ALEN];
 	u8 pending_join_dev_addr[ETH_ALEN];
 	int pending_join_wps_method;
@@ -544,6 +546,7 @@ struct wpa_supplicant {
 		P2P_GROUP_REMOVAL_IDLE_TIMEOUT,
 		P2P_GROUP_REMOVAL_UNAVAILABLE
 	} removal_reason;
+        int p2p_client_persistent_grp;
 #endif /* CONFIG_P2P */
 
 	struct wpa_ssid *bgscan_ssid;

@@ -1623,6 +1623,16 @@ wpa_supplicant_event_interface_status(struct wpa_supplicant *wpa_s,
 			wpa_msg(wpa_s, MSG_INFO, "Failed to initialize the "
 				"driver after interface was added");
 		}
+#ifdef CONFIG_P2P
+		wpa_drv_p2p_capa_init(wpa_s);
+
+                if (wpas_p2p_init(wpa_s->global, wpa_s) < 0) {
+		  wpa_printf(MSG_ERROR, "%s : Failed to init P2P", __func__);
+		  break;
+                }
+                wpa_printf(MSG_DEBUG, "%s : wpas_p2p_init success", __func__);
+#endif
+
 		break;
 	case EVENT_INTERFACE_REMOVED:
 		wpa_dbg(wpa_s, MSG_DEBUG, "Configured interface was removed");
