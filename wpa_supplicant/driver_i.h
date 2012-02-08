@@ -79,6 +79,24 @@ static inline int wpa_drv_scan(struct wpa_supplicant *wpa_s,
 	return -1;
 }
 
+static inline int wpa_drv_get_ssid_postfix(struct wpa_supplicant *wpa_s,
+					   u8 *ssid, size_t *ssid_len)
+{
+         if (!wpa_s->driver->p2p_get_ssid_postfix)
+	        return -1;
+
+	 return wpa_s->driver->p2p_get_ssid_postfix(wpa_s->drv_priv, ssid, ssid_len);
+}
+
+static inline int wpa_drv_get_dev_addr(struct wpa_supplicant *wpa_s,
+				       const u8 *peer_addr, u8 *dev_addr)
+{
+        if (!wpa_s->driver->p2p_get_dev_addr)
+	        return -1;
+
+	return wpa_s->driver->p2p_get_dev_addr(wpa_s->drv_priv, peer_addr, dev_addr);
+}
+
 static inline struct wpa_scan_results * wpa_drv_get_scan_results2(
 	struct wpa_supplicant *wpa_s)
 {
@@ -103,6 +121,65 @@ static inline int wpa_drv_get_ssid(struct wpa_supplicant *wpa_s, u8 *ssid)
 	return -1;
 }
 
+static inline int wpa_drv_get_interface_addr(struct wpa_supplicant *wpa_s,
+					     const u8 *peer_addr, u8 *iface_addr)
+{
+         if (!wpa_s->driver->p2p_get_interface_addr)
+	        return -1;
+
+	 return wpa_s->driver->p2p_get_interface_addr(wpa_s->drv_priv, peer_addr, iface_addr);
+}
+
+static inline int wpa_drv_p2p_peer(struct wpa_supplicant *wpa_s, char *cmd,
+				   char *buf, size_t buflen)
+{
+        if (!wpa_s->driver->p2p_peer)
+	       return -1;
+	return wpa_s->driver->p2p_peer(wpa_s->drv_priv, cmd, buf, buflen);
+}
+
+static inline int wpa_drv_p2p_get_go_params(struct wpa_supplicant *wpa_s,
+					    const u8 *go_dev_addr, u16 *freq, u8 *ssid, u8* ssid_len)
+{
+        if (!wpa_s->driver->p2p_get_go_params)
+	       return -1;
+	return wpa_s->driver->p2p_get_go_params(wpa_s->drv_priv, go_dev_addr,
+					  freq, ssid, ssid_len);
+}
+
+static inline int wpa_drv_p2p_auth_invite(struct wpa_supplicant *wpa_s,
+					  const u8 *auth_peer)
+{
+         if (!wpa_s->driver->p2p_auth_invite)
+	       return -1;
+
+	 return wpa_s->driver->p2p_auth_invite(wpa_s->drv_priv, auth_peer);
+}
+
+static inline int wpa_drv_p2p_auth_go_neg(struct wpa_supplicant *wpa_s,
+					  const u8 *peer_addr, int wps_method,
+					  int go_intent,
+					  const u8 *own_interface_addr,
+					  unsigned int force_freq,
+					  int persistent_group)
+{
+          if (!wpa_s->driver->p2p_auth_go_neg)
+	        return -1;
+
+	  return wpa_s->driver->p2p_auth_go_neg(wpa_s->drv_priv, peer_addr,
+					wps_method, go_intent, own_interface_addr,
+					force_freq, persistent_group);
+}
+
+
+static inline int wpa_drv_p2p_get_own_info(struct wpa_supplicant *wpa_s,
+					   char *buf, size_t buflen)
+{
+         if (!wpa_s->driver->p2p_get_own_info)
+	       return -1;
+	 return wpa_s->driver->p2p_get_own_info(wpa_s->drv_priv, buf, buflen);
+}
+
 static inline int wpa_drv_set_key(struct wpa_supplicant *wpa_s,
 				  enum wpa_alg alg, const u8 *addr,
 				  int key_idx, int set_tx,
@@ -117,6 +194,7 @@ static inline int wpa_drv_set_key(struct wpa_supplicant *wpa_s,
 	}
 	return -1;
 }
+
 
 static inline int wpa_drv_deauthenticate(struct wpa_supplicant *wpa_s,
 					 const u8 *addr, int reason_code)
@@ -554,6 +632,18 @@ static inline int wpa_drv_ampdu(struct wpa_supplicant *wpa_s, int ampdu)
 		return -1;
 	return wpa_s->driver->ampdu(wpa_s->drv_priv, ampdu);
 }
+static inline int wpa_drv_p2p_capa_init(struct wpa_supplicant *wpa_s)
+{
+         if (!wpa_s->driver->p2p_capa_init)
+	        return -1;
+	 return wpa_s->driver->p2p_capa_init(wpa_s->drv_priv);
+}
+static inline int wpa_drv_p2p_flush(struct wpa_supplicant *wpa_s)
+{
+         if (!wpa_s->driver->p2p_flush)
+                return -1;
+	 return wpa_s->driver->p2p_flush(wpa_s->drv_priv);
+}
 
 static inline int wpa_drv_p2p_find(struct wpa_supplicant *wpa_s,
 				   unsigned int timeout, int type)
@@ -568,6 +658,12 @@ static inline int wpa_drv_p2p_stop_find(struct wpa_supplicant *wpa_s)
 	if (!wpa_s->driver->p2p_stop_find)
 		return -1;
 	return wpa_s->driver->p2p_stop_find(wpa_s->drv_priv);
+}
+static inline int wpa_drv_p2p_cancel(struct wpa_supplicant *wpa_s)
+{
+        if (!wpa_s->driver->p2p_cancel)
+                return -1;
+	return wpa_s->driver->p2p_cancel(wpa_s->drv_priv);
 }
 
 static inline int wpa_drv_p2p_listen(struct wpa_supplicant *wpa_s,
@@ -607,6 +703,22 @@ wpa_drv_p2p_group_formation_failed(struct wpa_supplicant *wpa_s)
 	if (!wpa_s->driver->p2p_group_formation_failed)
 		return -1;
 	return wpa_s->driver->p2p_group_formation_failed(wpa_s->drv_priv);
+}
+static inline int wpa_drv_p2p_group_init(struct wpa_supplicant *wpa_s,
+					 int persistent_group, int group_formation)
+{
+        if (!wpa_s->driver->p2p_group_init)
+                return -1;
+	return wpa_s->driver->p2p_group_init(wpa_s->drv_priv,
+				       persistent_group, group_formation);
+}
+
+static inline int wpa_drv_p2p_set_config(struct wpa_supplicant *wpa_s,
+					 char *cmd)
+{
+        if (!wpa_s->driver->p2p_set_config)
+                return -1;
+	return wpa_s->driver->p2p_set_config(wpa_s->drv_priv, cmd);
 }
 
 static inline int wpa_drv_p2p_set_params(struct wpa_supplicant *wpa_s,

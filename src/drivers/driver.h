@@ -704,23 +704,23 @@ struct device_type {
  * struct p2p_params - P2P parameters for driver-based P2P management
  */
 struct p2p_params {
-	const char *dev_name;
-	u8 pri_dev_type[8];
+  //	const char *dev_name;
+  //	u8 pri_dev_type[8];
 #define DRV_MAX_SEC_DEV_TYPES 5
-	u8 sec_dev_type[DRV_MAX_SEC_DEV_TYPES][8];
-	size_t num_sec_dev_types;
+  //	u8 sec_dev_type[DRV_MAX_SEC_DEV_TYPES][8];
+  //	size_t num_sec_dev_types;
 #ifdef CONFIG_DRIVER_AR6003
-  int go_intent;
-  u8 country[3];
-  u8 reg_class;
-  u8 listen_channel;
-  u8 op_reg_class;
-  u8 op_channel;
-  char device_name[32];
-  u8  uuid[16];
-  struct device_type primary_dev_type;
-  struct device_type secondary_dev_type[DRV_MAX_SEC_DEV_TYPES];
-  u16 config_methods;
+        int go_intent;
+        u8 country[3];
+        u8 reg_class;
+        u8 listen_channel;
+        u8 op_reg_class;
+        u8 op_channel;
+        char device_name[32];
+        u8  uuid[16];
+        struct device_type primary_dev_type;
+        struct device_type secondary_dev_type[DRV_MAX_SEC_DEV_TYPES];
+        u16 config_methods;
 #endif
 
 };
