@@ -2,14 +2,8 @@
  * WPA Supplicant - background scan and roaming module: learn
  * Copyright (c) 2009-2010, Jouni Malinen <j@w1.fi>
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
- *
- * Alternatively, this software may be distributed under the terms of BSD
- * license.
- *
- * See README and COPYING for more details.
+ * This software may be distributed under the terms of the BSD license.
+ * See README for more details.
  */
 
 #include "includes.h"
@@ -355,20 +349,19 @@ static int bgscan_learn_get_params(struct bgscan_learn_data *data,
 static int * bgscan_learn_get_supp_freqs(struct wpa_supplicant *wpa_s)
 {
 	struct hostapd_hw_modes *modes;
-	u16 num_modes, flags;
 	int i, j, *freqs = NULL, *n;
 	size_t count = 0;
 
-	modes = wpa_drv_get_hw_feature_data(wpa_s, &num_modes, &flags);
-	if (!modes)
+	modes = wpa_s->hw.modes;
+	if (modes == NULL)
 		return NULL;
 
-	for (i = 0; i < num_modes; i++) {
+	for (i = 0; i < wpa_s->hw.num_modes; i++) {
 		for (j = 0; j < modes[i].num_channels; j++) {
 			if (modes[i].channels[j].flag & HOSTAPD_CHAN_DISABLED)
 				continue;
 			n = os_realloc(freqs, (count + 2) * sizeof(int));
-			if (!n)
+			if (n == NULL)
 				continue;
 
 			freqs = n;
@@ -376,10 +369,7 @@ static int * bgscan_learn_get_supp_freqs(struct wpa_supplicant *wpa_s)
 			count++;
 			freqs[count] = 0;
 		}
-		os_free(modes[i].channels);
-		os_free(modes[i].rates);
 	}
-	os_free(modes);
 
 	return freqs;
 }

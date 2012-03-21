@@ -2,14 +2,8 @@
  * wpa_supplicant - Event notifications
  * Copyright (c) 2009-2010, Jouni Malinen <j@w1.fi>
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
- *
- * Alternatively, this software may be distributed under the terms of BSD
- * license.
- *
- * See README and COPYING for more details.
+ * This software may be distributed under the terms of the BSD license.
+ * See README for more details.
  */
 
 #include "utils/includes.h"
@@ -22,6 +16,7 @@
 #include "dbus/dbus_common.h"
 #include "dbus/dbus_old.h"
 #include "dbus/dbus_new.h"
+#include "rsn_supp/wpa.h"
 #include "driver_i.h"
 #include "scan.h"
 #include "p2p_supplicant.h"
@@ -140,6 +135,15 @@ void wpas_notify_network_selected(struct wpa_supplicant *wpa_s,
 }
 
 
+void wpas_notify_network_request(struct wpa_supplicant *wpa_s,
+				 struct wpa_ssid *ssid,
+				 enum wpa_ctrl_req_type rtype,
+				 const char *default_txt)
+{
+	wpas_dbus_signal_network_request(wpa_s, ssid, rtype, default_txt);
+}
+
+
 void wpas_notify_scanning(struct wpa_supplicant *wpa_s)
 {
 	/* notify the old DBus API */
@@ -238,8 +242,13 @@ void wpas_notify_persistent_group_removed(struct wpa_supplicant *wpa_s,
 void wpas_notify_network_removed(struct wpa_supplicant *wpa_s,
 				 struct wpa_ssid *ssid)
 {
+	if (wpa_s->wpa)
+		wpa_sm_pmksa_cache_flush(wpa_s->wpa, ssid);
 	if (wpa_s->global->p2p_group_formation != wpa_s)
 		wpas_dbus_unregister_network(wpa_s, ssid->id);
+#ifdef CONFIG_P2P
+	wpas_p2p_network_removed(wpa_s, ssid);
+#endif /* CONFIG_P2P */
 }
 
 
@@ -431,9 +440,10 @@ void wpas_notify_p2p_go_neg_req(struct wpa_supplicant *wpa_s,
 }
 
 
-void wpas_notify_p2p_go_neg_completed(struct wpa_supplicant *wpa_s, int status)
+void wpas_notify_p2p_go_neg_completed(struct wpa_supplicant *wpa_s,
+				      struct p2p_go_neg_results *res)
 {
-	wpas_dbus_signal_p2p_go_neg_resp(wpa_s, status);
+	wpas_dbus_signal_p2p_go_neg_resp(wpa_s, res);
 }
 
 
@@ -509,9 +519,12 @@ void wpas_notify_p2p_wps_failed(struct wpa_supplicant *wpa_s,
 
 
 static void wpas_notify_ap_sta_authorized(struct wpa_supplicant *wpa_s,
-					  const u8 *sta)
+					  const u8 *sta,
+					  const u8 *p2p_dev_addr)
 {
 #ifdef CONFIG_P2P
+	wpas_p2p_notify_ap_sta_authorized(wpa_s, p2p_dev_addr);
+
 	/*
 	 * Register a group member object corresponding to this peer and
 	 * emit a PeerJoined signal. This will check if it really is a
@@ -548,10 +561,11 @@ static void wpas_notify_ap_sta_deauthorized(struct wpa_supplicant *wpa_s,
 
 
 void wpas_notify_sta_authorized(struct wpa_supplicant *wpa_s,
-				const u8 *mac_addr, int authorized)
+				const u8 *mac_addr, int authorized,
+				const u8 *p2p_dev_addr)
 {
 	if (authorized)
-		wpas_notify_ap_sta_authorized(wpa_s, mac_addr);
+		wpas_notify_ap_sta_authorized(wpa_s, mac_addr, p2p_dev_addr);
 	else
 		wpas_notify_ap_sta_deauthorized(wpa_s, mac_addr);
 }

@@ -34,7 +34,7 @@ L_CFLAGS = -DWPA_IGNORE_CONFIG_ERRORS
 # Set Android log name
 L_CFLAGS += -DANDROID_LOG_NAME=\"wpa_supplicant\"
 
-ifdef CONFIG_DRIVER_NL80211
+ifeq ($(BOARD_WLAN_DEVICE), bcmdhd)
 L_CFLAGS += -DANDROID_BRCM_P2P_PATCH
 endif
 
@@ -78,10 +78,6 @@ INCLUDES += frameworks/base/cmds/keystore
 ifdef CONFIG_DRIVER_NL80211
 INCLUDES += external/libnl-headers
 endif
-INCLUDES += $(BOARD_WLAN_ATHEROS_SDK)/include
-INCLUDES += $(BOARD_WLAN_ATHEROS_SDK)/host/include
-INCLUDES += $(BOARD_WLAN_ATHEROS_SDK)/host/os/linux/include
-INCLUDES += $(BOARD_WLAN_ATHEROS_SDK)/host/wlan/include
 
 OBJS = config.c
 OBJS += notify.c
@@ -96,6 +92,7 @@ OBJS_p += src/utils/wpa_debug.c
 OBJS_p += src/utils/wpabuf.c
 OBJS_c = wpa_cli.c src/common/wpa_ctrl.c
 OBJS_c += src/utils/wpa_debug.c
+OBJS_c += src/utils/common.c
 OBJS_d =
 OBJS_priv =
 
@@ -189,9 +186,13 @@ endif
 
 ifdef CONFIG_TDLS
 L_CFLAGS += -DCONFIG_TDLS
-OBJS += src/rsn_supp/tdls.o
+OBJS += src/rsn_supp/tdls.c
 NEED_SHA256=y
 NEED_AES_OMAC1=y
+endif
+
+ifdef CONFIG_TDLS_TESTING
+L_CFLAGS += -DCONFIG_TDLS_TESTING
 endif
 
 ifdef CONFIG_PEERKEY
@@ -233,10 +234,20 @@ OBJS += src/p2p/p2p_dev_disc.c
 OBJS += src/p2p/p2p_group.c
 OBJS += src/ap/p2p_hostapd.c
 L_CFLAGS += -DCONFIG_P2P
+NEED_GAS=y
+NEED_OFFCHANNEL=y
 NEED_80211_COMMON=y
+CONFIG_WPS=y
+CONFIG_AP=y
 ifdef CONFIG_P2P_STRICT
 L_CFLAGS += -DCONFIG_P2P_STRICT
 endif
+endif
+
+ifdef CONFIG_INTERWORKING
+OBJS += interworking.c
+L_CFLAGS += -DCONFIG_INTERWORKING
+NEED_GAS=y
 endif
 
 ifdef CONFIG_NO_WPA2
@@ -703,8 +714,10 @@ OBJS += src/ap/ap_mlme.c
 OBJS += src/ap/ieee802_1x.c
 OBJS += src/eapol_auth/eapol_auth_sm.c
 OBJS += src/ap/ieee802_11_auth.c
+OBJS += src/ap/ieee802_11_shared.c
 OBJS += src/ap/drv_callbacks.c
 OBJS += src/ap/ap_drv_ops.c
+OBJS += src/ap/beacon.c
 ifdef CONFIG_IEEE80211N
 OBJS += src/ap/ieee802_11_ht.c
 endif
@@ -722,7 +735,6 @@ L_CFLAGS += -DCONFIG_IEEE80211N
 endif
 
 ifdef NEED_AP_MLME
-OBJS += src/ap/beacon.c
 OBJS += src/ap/wmm.c
 OBJS += src/ap/ap_list.c
 OBJS += src/ap/ieee802_11.c
@@ -806,6 +818,7 @@ endif
 
 ifdef NEED_MILENAGE
 OBJS += src/crypto/milenage.c
+NEED_AES_ENCBLOCK=y
 endif
 
 ifdef CONFIG_PKCS12
@@ -838,6 +851,10 @@ ifndef CONFIG_TLS
 CONFIG_TLS=openssl
 endif
 
+ifdef CONFIG_TLSV11
+L_CFLAGS += -DCONFIG_TLSV11
+endif
+
 ifeq ($(CONFIG_TLS), openssl)
 ifdef TLS_FUNCS
 L_CFLAGS += -DEAP_TLS_OPENSSL
@@ -857,10 +874,6 @@ ifeq ($(CONFIG_TLS), gnutls)
 ifdef TLS_FUNCS
 OBJS += src/crypto/tls_gnutls.c
 LIBS += -lgnutls -lgpg-error
-ifdef CONFIG_GNUTLS_EXTRA
-L_CFLAGS += -DCONFIG_GNUTLS_EXTRA
-LIBS += -lgnutls-extra
-endif
 endif
 OBJS += src/crypto/crypto_gnutls.c
 OBJS_p += src/crypto/crypto_gnutls.c
@@ -1166,17 +1179,6 @@ endif
 ifndef DBUS_INCLUDE
 DBUS_INCLUDE := $(shell $(PKG_CONFIG) --cflags dbus-1)
 endif
-dbus_version=$(subst ., ,$(shell $(PKG_CONFIG) --modversion dbus-1))
-DBUS_VERSION_MAJOR=$(word 1,$(dbus_version))
-DBUS_VERSION_MINOR=$(word 2,$(dbus_version))
-ifeq ($(DBUS_VERSION_MAJOR),)
-DBUS_VERSION_MAJOR=0
-endif
-ifeq ($(DBUS_VERSION_MINOR),)
-DBUS_VERSION_MINOR=0
-endif
-DBUS_INCLUDE += -DDBUS_VERSION_MAJOR=$(DBUS_VERSION_MAJOR)
-DBUS_INCLUDE += -DDBUS_VERSION_MINOR=$(DBUS_VERSION_MINOR)
 DBUS_CFLAGS += $(DBUS_INCLUDE)
 endif
 
@@ -1261,12 +1263,6 @@ OBJS += sme.c
 L_CFLAGS += -DCONFIG_SME
 endif
 
-ifdef CONFIG_CLIENT_MLME
-OBJS += mlme.c
-L_CFLAGS += -DCONFIG_CLIENT_MLME
-NEED_80211_COMMON=y
-endif
-
 ifdef NEED_80211_COMMON
 OBJS += src/common/ieee802_11_common.c
 endif
@@ -1319,7 +1315,21 @@ L_CFLAGS += -DCONFIG_BGSCAN
 OBJS += bgscan.c
 endif
 
-OBJS_wpa_rm := ctrl_iface.c mlme.c ctrl_iface_unix.c
+ifdef NEED_GAS
+OBJS += ../src/common/gas.c
+OBJS += gas_query.c
+L_CFLAGS += -DCONFIG_GAS
+NEED_OFFCHANNEL=y
+endif
+
+ifdef NEED_OFFCHANNEL
+OBJS += offchannel.c
+L_CFLAGS += -DCONFIG_OFFCHANNEL
+endif
+
+OBJS += src/drivers/driver_common.c
+
+OBJS_wpa_rm := ctrl_iface.c ctrl_iface_unix.c
 OBJS_wpa := $(filter-out $(OBJS_wpa_rm),$(OBJS)) $(OBJS_h) tests/test_wpa.c
 ifdef CONFIG_AUTHENTICATOR
 OBJS_wpa += tests/link_test.c
@@ -1405,9 +1415,13 @@ ifdef CONFIG_DRIVER_CUSTOM
 LOCAL_STATIC_LIBRARIES := libCustomWifi
 endif
 ifneq ($(BOARD_WPA_SUPPLICANT_PRIVATE_LIB),)
-LOCAL_STATIC_LIBRARIES += $(BOARD_WPA_SUPPLICANT_PRIVATE_LIB)
+##Build as part of wpa_supplicant build now
+##LOCAL_STATIC_LIBRARIES += $(BOARD_WPA_SUPPLICANT_PRIVATE_LIB)
 endif
-LOCAL_SHARED_LIBRARIES := libc libcutils libcrypto libssl
+LOCAL_SHARED_LIBRARIES := libc libcutils
+ifeq ($(CONFIG_TLS), openssl)
+LOCAL_SHARED_LIBRARIES += libcrypto libssl
+endif
 ifdef CONFIG_DRIVER_NL80211
 LOCAL_STATIC_LIBRARIES += libnl_2
 endif
@@ -1435,20 +1449,7 @@ local_target_dir := $(TARGET_OUT)/etc/wifi
 
 include $(CLEAR_VARS)
 LOCAL_MODULE := wpa_supplicant.conf
-LOCAL_MODULE_TAGS := optional
-LOCAL_MODULE_CLASS := ETC
-LOCAL_MODULE_PATH := $(local_target_dir)
-LOCAL_SRC_FILES := $(LOCAL_MODULE)
-include $(BUILD_PREBUILT)
-
-########################
-########################
-
-local_target_dir := $(TARGET_OUT)/etc/wifi
-
-include $(CLEAR_VARS)
-LOCAL_MODULE := wpa_supplicant_p2p.conf
-LOCAL_MODULE_TAGS := optional
+LOCAL_MODULE_TAGS := debug eng optional
 LOCAL_MODULE_CLASS := ETC
 LOCAL_MODULE_PATH := $(local_target_dir)
 LOCAL_SRC_FILES := $(LOCAL_MODULE)

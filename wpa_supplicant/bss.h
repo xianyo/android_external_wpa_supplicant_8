@@ -2,14 +2,8 @@
  * BSS table
  * Copyright (c) 2009-2010, Jouni Malinen <j@w1.fi>
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
- *
- * Alternatively, this software may be distributed under the terms of BSD
- * license.
- *
- * See README and COPYING for more details.
+ * This software may be distributed under the terms of the BSD license.
+ * See README for more details.
  */
 
 #ifndef BSS_H
@@ -23,6 +17,7 @@ struct wpa_scan_res;
 #define WPA_BSS_LEVEL_DBM		BIT(3)
 #define WPA_BSS_AUTHENTICATED		BIT(4)
 #define WPA_BSS_ASSOCIATED		BIT(5)
+#define WPA_BSS_ANQP_FETCH_TRIED	BIT(6)
 
 /**
  * struct wpa_bss - BSS table
@@ -65,6 +60,15 @@ struct wpa_bss {
 	int level;
 	u64 tsf;
 	struct os_time last_update;
+#ifdef CONFIG_INTERWORKING
+	struct wpabuf *anqp_venue_name;
+	struct wpabuf *anqp_network_auth_type;
+	struct wpabuf *anqp_roaming_consortium;
+	struct wpabuf *anqp_ip_addr_type_availability;
+	struct wpabuf *anqp_nai_realm;
+	struct wpabuf *anqp_3gpp;
+	struct wpabuf *anqp_domain_name;
+#endif /* CONFIG_INTERWORKING */
 	size_t ie_len;
 	size_t beacon_ie_len;
 	/* followed by ie_len octets of IEs */
@@ -84,6 +88,8 @@ struct wpa_bss * wpa_bss_get(struct wpa_supplicant *wpa_s, const u8 *bssid,
 			     const u8 *ssid, size_t ssid_len);
 struct wpa_bss * wpa_bss_get_bssid(struct wpa_supplicant *wpa_s,
 				   const u8 *bssid);
+struct wpa_bss * wpa_bss_get_p2p_dev_addr(struct wpa_supplicant *wpa_s,
+					  const u8 *dev_addr);
 struct wpa_bss * wpa_bss_get_id(struct wpa_supplicant *wpa_s, unsigned int id);
 const u8 * wpa_bss_get_ie(const struct wpa_bss *bss, u8 ie);
 const u8 * wpa_bss_get_vendor_ie(const struct wpa_bss *bss, u32 vendor_type);
