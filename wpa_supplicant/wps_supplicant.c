@@ -2,14 +2,8 @@
  * wpa_supplicant / WPS integration
  * Copyright (c) 2008-2010, Jouni Malinen <j@w1.fi>
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
- *
- * Alternatively, this software may be distributed under the terms of BSD
- * license.
- *
- * See README and COPYING for more details.
+ * This software may be distributed under the terms of the BSD license.
+ * See README for more details.
  */
 
 #include "includes.h"
@@ -77,8 +71,10 @@ int wpas_wps_eapol_cb(struct wpa_supplicant *wpa_s)
 	if (wpa_s->key_mgmt == WPA_KEY_MGMT_WPS && wpa_s->current_ssid &&
 	    !(wpa_s->current_ssid->key_mgmt & WPA_KEY_MGMT_WPS)) {
 		int disabled = wpa_s->current_ssid->disabled;
+		unsigned int freq = wpa_s->assoc_freq;
 		wpa_printf(MSG_DEBUG, "WPS: Network configuration replaced - "
-			   "try to associate with the received credential");
+			   "try to associate with the received credential "
+			   "(freq=%u)", freq);
 		wpa_supplicant_deauthenticate(wpa_s,
 					      WLAN_REASON_DEAUTH_LEAVING);
 		if (disabled) {
@@ -87,7 +83,8 @@ int wpas_wps_eapol_cb(struct wpa_supplicant *wpa_s)
 			return 1;
 		}
 		wpa_s->after_wps = 5;
-		wpa_s->wps_freq = wpa_s->assoc_freq;
+		wpa_s->wps_freq = freq;
+		wpa_s->normal_scans = 0;
 		wpa_s->reassociate = 1;
 		wpa_supplicant_req_scan(wpa_s, 0, 0);
 		return 1;
@@ -127,6 +124,8 @@ static void wpas_wps_security_workaround(struct wpa_supplicant *wpa_s,
 	if (wpa_drv_get_capa(wpa_s, &capa))
 		return; /* Unknown what driver supports */
 
+	if (ssid->ssid == NULL)
+		return;
 	bss = wpa_bss_get(wpa_s, cred->mac_addr, ssid->ssid, ssid->ssid_len);
 	if (bss == NULL) {
 		wpa_printf(MSG_DEBUG, "WPS: The AP was not found from BSS "
@@ -192,7 +191,9 @@ static int wpa_supplicant_wps_cred(void *ctx,
 	struct wpa_ssid *ssid = wpa_s->current_ssid;
 	u8 key_idx = 0;
 	u16 auth_type;
+#ifdef CONFIG_WPS_REG_DISABLE_OPEN
 	int registrar = 0;
+#endif /* CONFIG_WPS_REG_DISABLE_OPEN */
 
 	if ((wpa_s->conf->wps_cred_processing == 1 ||
 	     wpa_s->conf->wps_cred_processing == 2) && cred->cred_attr) {
@@ -246,11 +247,13 @@ static int wpa_supplicant_wps_cred(void *ctx,
 	if (ssid && (ssid->key_mgmt & WPA_KEY_MGMT_WPS)) {
 		wpa_printf(MSG_DEBUG, "WPS: Replace WPS network block based "
 			   "on the received credential");
+#ifdef CONFIG_WPS_REG_DISABLE_OPEN
 		if (ssid->eap.identity &&
 		    ssid->eap.identity_len == WSC_ID_REGISTRAR_LEN &&
 		    os_memcmp(ssid->eap.identity, WSC_ID_REGISTRAR,
 			      WSC_ID_REGISTRAR_LEN) == 0)
 			registrar = 1;
+#endif /* CONFIG_WPS_REG_DISABLE_OPEN */
 		os_free(ssid->eap.identity);
 		ssid->eap.identity = NULL;
 		ssid->eap.identity_len = 0;
@@ -657,6 +660,8 @@ static void wpa_supplicant_wps_event(void *ctx, enum wps_event event,
 		wpa_supplicant_wps_event_er_set_sel_reg(wpa_s,
 							&data->set_sel_reg);
 		break;
+	case WPS_EV_AP_PIN_SUCCESS:
+		break;
 	}
 }
 
@@ -783,9 +788,23 @@ static struct wpa_ssid * wpas_wps_add_network(struct wpa_supplicant *wpa_s,
 
 
 static void wpas_wps_reassoc(struct wpa_supplicant *wpa_s,
-			     struct wpa_ssid *selected)
+			     struct wpa_ssid *selected, const u8 *bssid)
 {
 	struct wpa_ssid *ssid;
+	struct wpa_bss *bss;
+
+	wpa_s->known_wps_freq = 0;
+	if (bssid) {
+		bss = wpa_bss_get_bssid(wpa_s, bssid);
+		if (bss && bss->freq > 0) {
+			wpa_s->known_wps_freq = 1;
+			wpa_s->wps_freq = bss->freq;
+		}
+	}
+
+	if (wpa_s->current_ssid)
+		wpa_supplicant_deauthenticate(
+			wpa_s, WLAN_REASON_DEAUTH_LEAVING);
 
 	/* Mark all other networks disabled and trigger reassociation */
 	ssid = wpa_s->conf->ssid;
@@ -808,6 +827,7 @@ static void wpas_wps_reassoc(struct wpa_supplicant *wpa_s,
 	wpa_s->disconnected = 0;
 	wpa_s->reassociate = 1;
 	wpa_s->scan_runs = 0;
+	wpa_s->normal_scans = 0;
 	wpa_s->wps_success = 0;
 	wpa_s->blacklist_cleared = 0;
 	wpa_supplicant_req_scan(wpa_s, 0, 0);
@@ -841,7 +861,7 @@ int wpas_wps_start_pbc(struct wpa_supplicant *wpa_s, const u8 *bssid,
 		ssid->eap.fragment_size = wpa_s->wps_fragment_size;
 	eloop_register_timeout(WPS_PBC_WALK_TIME, 0, wpas_wps_timeout,
 			       wpa_s, NULL);
-	wpas_wps_reassoc(wpa_s, ssid);
+	wpas_wps_reassoc(wpa_s, ssid, bssid);
 	return 0;
 }
 
@@ -884,7 +904,7 @@ int wpas_wps_start_pin(struct wpa_supplicant *wpa_s, const u8 *bssid,
 		ssid->eap.fragment_size = wpa_s->wps_fragment_size;
 	eloop_register_timeout(WPS_PBC_WALK_TIME, 0, wpas_wps_timeout,
 			       wpa_s, NULL);
-	wpas_wps_reassoc(wpa_s, ssid);
+	wpas_wps_reassoc(wpa_s, ssid, bssid);
 	return rpin;
 }
 
@@ -1004,7 +1024,7 @@ int wpas_wps_start_reg(struct wpa_supplicant *wpa_s, const u8 *bssid,
 		ssid->eap.fragment_size = wpa_s->wps_fragment_size;
 	eloop_register_timeout(WPS_PBC_WALK_TIME, 0, wpas_wps_timeout,
 			       wpa_s, NULL);
-	wpas_wps_reassoc(wpa_s, ssid);
+	wpas_wps_reassoc(wpa_s, ssid, bssid);
 	return 0;
 }
 
@@ -1114,6 +1134,8 @@ int wpas_wps_init(struct wpa_supplicant *wpa_s)
 {
 	struct wps_context *wps;
 	struct wps_registrar_config rcfg;
+	struct hostapd_hw_modes *modes;
+	u16 m;
 
 	wps = os_zalloc(sizeof(*wps));
 	if (wps == NULL)
@@ -1138,6 +1160,7 @@ int wpas_wps_init(struct wpa_supplicant *wpa_s)
 		return -1;
 	}
 	wps->config_methods = wps_fix_config_methods(wps->config_methods);
+	wps->dev.config_methods = wps->config_methods;
 	os_memcpy(wps->dev.pri_dev_type, wpa_s->conf->device_type,
 		  WPS_DEV_TYPE_LEN);
 
@@ -1146,7 +1169,23 @@ int wpas_wps_init(struct wpa_supplicant *wpa_s)
 		  WPS_DEV_TYPE_LEN * wps->dev.num_sec_dev_types);
 
 	wps->dev.os_version = WPA_GET_BE32(wpa_s->conf->os_version);
-	wps->dev.rf_bands = WPS_RF_24GHZ | WPS_RF_50GHZ; /* TODO: config */
+	modes = wpa_s->hw.modes;
+	if (modes) {
+		for (m = 0; m < wpa_s->hw.num_modes; m++) {
+			if (modes[m].mode == HOSTAPD_MODE_IEEE80211B ||
+			    modes[m].mode == HOSTAPD_MODE_IEEE80211G)
+				wps->dev.rf_bands |= WPS_RF_24GHZ;
+			else if (modes[m].mode == HOSTAPD_MODE_IEEE80211A)
+				wps->dev.rf_bands |= WPS_RF_50GHZ;
+		}
+	}
+	if (wps->dev.rf_bands == 0) {
+		/*
+		 * Default to claiming support for both bands if the driver
+		 * does not provide support for fetching supported bands.
+		 */
+		wps->dev.rf_bands = WPS_RF_24GHZ | WPS_RF_50GHZ;
+	}
 	os_memcpy(wps->dev.mac_addr, wpa_s->own_addr, ETH_ALEN);
 	wpas_wps_set_uuid(wpa_s, wps);
 

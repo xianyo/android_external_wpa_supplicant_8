@@ -2,14 +2,8 @@
  * wpa_supplicant - SME
  * Copyright (c) 2009-2010, Jouni Malinen <j@w1.fi>
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
- *
- * Alternatively, this software may be distributed under the terms of BSD
- * license.
- *
- * See README and COPYING for more details.
+ * This software may be distributed under the terms of the BSD license.
+ * See README for more details.
  */
 
 #include "includes.h"
@@ -29,7 +23,6 @@
 #include "wps_supplicant.h"
 #include "p2p_supplicant.h"
 #include "notify.h"
-#include "blacklist.h"
 #include "bss.h"
 #include "scan.h"
 #include "sme.h"
@@ -72,6 +65,7 @@ void sme_authenticate(struct wpa_supplicant *wpa_s,
 	params.bssid = bss->bssid;
 	params.ssid = bss->ssid;
 	params.ssid_len = bss->ssid_len;
+	params.p2p = ssid->p2p_group;
 
 	if (wpa_s->sme.ssid_len != params.ssid_len ||
 	    os_memcmp(wpa_s->sme.ssid, params.ssid, params.ssid_len) != 0)
@@ -115,11 +109,7 @@ void sme_authenticate(struct wpa_supplicant *wpa_s,
 
 	if ((wpa_bss_get_vendor_ie(bss, WPA_IE_VENDOR_TYPE) ||
 	     wpa_bss_get_ie(bss, WLAN_EID_RSN)) &&
-	    (ssid->key_mgmt & (WPA_KEY_MGMT_IEEE8021X | WPA_KEY_MGMT_PSK |
-			       WPA_KEY_MGMT_FT_IEEE8021X |
-			       WPA_KEY_MGMT_FT_PSK |
-			       WPA_KEY_MGMT_IEEE8021X_SHA256 |
-			       WPA_KEY_MGMT_PSK_SHA256))) {
+	    wpa_key_mgmt_wpa(ssid->key_mgmt)) {
 		int try_opportunistic;
 		try_opportunistic = ssid->proactive_key_caching &&
 			(ssid->proto & WPA_PROTO_RSN);
@@ -135,11 +125,7 @@ void sme_authenticate(struct wpa_supplicant *wpa_s,
 				"key management and encryption suites");
 			return;
 		}
-	} else if (ssid->key_mgmt &
-		   (WPA_KEY_MGMT_PSK | WPA_KEY_MGMT_IEEE8021X |
-		    WPA_KEY_MGMT_WPA_NONE | WPA_KEY_MGMT_FT_PSK |
-		    WPA_KEY_MGMT_FT_IEEE8021X | WPA_KEY_MGMT_PSK_SHA256 |
-		    WPA_KEY_MGMT_IEEE8021X_SHA256)) {
+	} else if (wpa_key_mgmt_wpa_any(ssid->key_mgmt)) {
 		wpa_s->sme.assoc_req_ie_len = sizeof(wpa_s->sme.assoc_req_ie);
 		if (wpa_supplicant_set_suites(wpa_s, NULL, ssid,
 					      wpa_s->sme.assoc_req_ie,
@@ -178,8 +164,7 @@ void sme_authenticate(struct wpa_supplicant *wpa_s,
 		wpa_ft_prepare_auth_request(wpa_s->wpa, ie);
 	}
 
-	if (md && ssid->key_mgmt & (WPA_KEY_MGMT_FT_PSK |
-				    WPA_KEY_MGMT_FT_IEEE8021X)) {
+	if (md && wpa_key_mgmt_ft(ssid->key_mgmt)) {
 		if (wpa_s->sme.assoc_req_ie_len + 5 <
 		    sizeof(wpa_s->sme.assoc_req_ie)) {
 			struct rsn_mdie *mdie;
@@ -226,17 +211,35 @@ void sme_authenticate(struct wpa_supplicant *wpa_s,
 		u8 *pos;
 		size_t len;
 		int res;
-		int p2p_group;
-		p2p_group = wpa_s->drv_flags & WPA_DRIVER_FLAGS_P2P_CAPABLE;
 		pos = wpa_s->sme.assoc_req_ie + wpa_s->sme.assoc_req_ie_len;
 		len = sizeof(wpa_s->sme.assoc_req_ie) -
 			wpa_s->sme.assoc_req_ie_len;
-		res = wpas_p2p_assoc_req_ie(wpa_s, bss, pos, len, p2p_group);
+		res = wpas_p2p_assoc_req_ie(wpa_s, bss, pos, len,
+					    ssid->p2p_group);
 		if (res >= 0)
 			wpa_s->sme.assoc_req_ie_len += res;
 	}
 #endif /* CONFIG_P2P */
 
+#ifdef CONFIG_INTERWORKING
+	if (wpa_s->conf->interworking) {
+		u8 *pos = wpa_s->sme.assoc_req_ie;
+		if (wpa_s->sme.assoc_req_ie_len > 0 && pos[0] == WLAN_EID_RSN)
+			pos += 2 + pos[1];
+		os_memmove(pos + 6, pos,
+			   wpa_s->sme.assoc_req_ie_len -
+			   (pos - wpa_s->sme.assoc_req_ie));
+		wpa_s->sme.assoc_req_ie_len += 6;
+		*pos++ = WLAN_EID_EXT_CAPAB;
+		*pos++ = 4;
+		*pos++ = 0x00;
+		*pos++ = 0x00;
+		*pos++ = 0x00;
+		*pos++ = 0x80; /* Bit 31 - Interworking */
+	}
+#endif /* CONFIG_INTERWORKING */
+
+	wpa_supplicant_cancel_sched_scan(wpa_s);
 	wpa_supplicant_cancel_scan(wpa_s);
 
 	wpa_msg(wpa_s, MSG_INFO, "SME: Trying to authenticate with " MACSTR
@@ -256,7 +259,8 @@ void sme_authenticate(struct wpa_supplicant *wpa_s,
 	if (wpa_drv_authenticate(wpa_s, &params) < 0) {
 		wpa_msg(wpa_s, MSG_INFO, "SME: Authentication request to the "
 			"driver failed");
-		wpa_supplicant_req_scan(wpa_s, 1, 0);
+		wpas_connection_failed(wpa_s, bss->bssid);
+		wpa_supplicant_mark_disassoc(wpa_s);
 		return;
 	}
 
@@ -357,6 +361,10 @@ void sme_associate(struct wpa_supplicant *wpa_s, enum wpas_mode mode,
 {
 	struct wpa_driver_associate_params params;
 	struct ieee802_11_elems elems;
+#ifdef CONFIG_HT_OVERRIDES
+	struct ieee80211_ht_capabilities htcaps;
+	struct ieee80211_ht_capabilities htcaps_mask;
+#endif /* CONFIG_HT_OVERRIDES */
 
 	os_memset(&params, 0, sizeof(params));
 	params.bssid = bssid;
@@ -368,6 +376,13 @@ void sme_associate(struct wpa_supplicant *wpa_s, enum wpas_mode mode,
 	params.wpa_ie_len = wpa_s->sme.assoc_req_ie_len;
 	params.pairwise_suite = cipher_suite2driver(wpa_s->pairwise_cipher);
 	params.group_suite = cipher_suite2driver(wpa_s->group_cipher);
+#ifdef CONFIG_HT_OVERRIDES
+	os_memset(&htcaps, 0, sizeof(htcaps));
+	os_memset(&htcaps_mask, 0, sizeof(htcaps_mask));
+	params.htcaps = (u8 *) &htcaps;
+	params.htcaps_mask = (u8 *) &htcaps_mask;
+	wpa_supplicant_apply_ht_overrides(wpa_s, wpa_s->current_ssid, &params);
+#endif /* CONFIG_HT_OVERRIDES */
 #ifdef CONFIG_IEEE80211R
 	if (auth_type == WLAN_AUTH_FT && wpa_s->sme.ft_ies) {
 		params.wpa_ie = wpa_s->sme.ft_ies;
@@ -392,16 +407,17 @@ void sme_associate(struct wpa_supplicant *wpa_s, enum wpas_mode mode,
 		wpa_dbg(wpa_s, MSG_DEBUG, "SME: Could not parse own IEs?!");
 		os_memset(&elems, 0, sizeof(elems));
 	}
-	if (elems.rsn_ie)
+	if (elems.rsn_ie) {
+		params.wpa_proto = WPA_PROTO_RSN;
 		wpa_sm_set_assoc_wpa_ie(wpa_s->wpa, elems.rsn_ie - 2,
 					elems.rsn_ie_len + 2);
-	else if (elems.wpa_ie)
+	} else if (elems.wpa_ie) {
+		params.wpa_proto = WPA_PROTO_WPA;
 		wpa_sm_set_assoc_wpa_ie(wpa_s->wpa, elems.wpa_ie - 2,
 					elems.wpa_ie_len + 2);
-	else
+	} else
 		wpa_sm_set_assoc_wpa_ie(wpa_s->wpa, NULL, 0);
-	if (elems.p2p &&
-	    (wpa_s->drv_flags & WPA_DRIVER_FLAGS_P2P_CAPABLE))
+	if (wpa_s->current_ssid && wpa_s->current_ssid->p2p_group)
 		params.p2p = 1;
 
 	if (wpa_s->parent->set_sta_uapsd)
@@ -493,6 +509,7 @@ void sme_event_auth_timed_out(struct wpa_supplicant *wpa_s,
 {
 	wpa_dbg(wpa_s, MSG_DEBUG, "SME: Authentication timed out");
 	wpas_connection_failed(wpa_s, wpa_s->pending_bssid);
+	wpa_supplicant_mark_disassoc(wpa_s);
 }
 
 
@@ -509,8 +526,7 @@ void sme_event_disassoc(struct wpa_supplicant *wpa_s,
 			union wpa_event_data *data)
 {
 	wpa_dbg(wpa_s, MSG_DEBUG, "SME: Disassociation event received");
-	if (wpa_s->sme.prev_bssid_set &&
-	    !(wpa_s->drv_flags & WPA_DRIVER_FLAGS_USER_SPACE_MLME)) {
+	if (wpa_s->sme.prev_bssid_set) {
 		/*
 		 * cfg80211/mac80211 can get into somewhat confused state if
 		 * the AP only disassociates us and leaves us in authenticated
@@ -628,7 +644,7 @@ static void sme_send_sa_query_req(struct wpa_supplicant *wpa_s,
 	os_memcpy(req + 2, trans_id, WLAN_SA_QUERY_TR_ID_LEN);
 	if (wpa_drv_send_action(wpa_s, wpa_s->assoc_freq, 0, wpa_s->bssid,
 				wpa_s->own_addr, wpa_s->bssid,
-				req, sizeof(req)) < 0)
+				req, sizeof(req), 0) < 0)
 		wpa_msg(wpa_s, MSG_INFO, "SME: Failed to send SA Query "
 			"Request");
 }
@@ -677,7 +693,7 @@ static void sme_start_sa_query(struct wpa_supplicant *wpa_s)
 }
 
 
-void sme_stop_sa_query(struct wpa_supplicant *wpa_s)
+static void sme_stop_sa_query(struct wpa_supplicant *wpa_s)
 {
 	eloop_cancel_timeout(sme_sa_query_timer, wpa_s, NULL);
 	os_free(wpa_s->sme.sa_query_trans_id);

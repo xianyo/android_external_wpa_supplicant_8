@@ -2,14 +2,8 @@
  * hostapd / main()
  * Copyright (c) 2002-2011, Jouni Malinen <j@w1.fi>
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
- *
- * Alternatively, this software may be distributed under the terms of BSD
- * license.
- *
- * See README and COPYING for more details.
+ * This software may be distributed under the terms of the BSD license.
+ * See README for more details.
  */
 
 #include "utils/includes.h"
@@ -27,6 +21,7 @@
 #include "eap_server/tncs.h"
 #include "ap/hostapd.h"
 #include "ap/ap_config.h"
+#include "ap/ap_drv_ops.h"
 #include "config_file.h"
 #include "eap_register.h"
 #include "dump_state.h"
@@ -37,28 +32,15 @@ extern int wpa_debug_level;
 extern int wpa_debug_show_keys;
 extern int wpa_debug_timestamp;
 
+extern struct wpa_driver_ops *wpa_drivers[];
 
-struct hapd_interfaces {
-	size_t count;
-	struct hostapd_iface **iface;
+
+struct hapd_global {
+	void **drv_priv;
+	size_t drv_count;
 };
 
-
-static int hostapd_for_each_interface(struct hapd_interfaces *interfaces,
-				      int (*cb)(struct hostapd_iface *iface,
-						void *ctx), void *ctx)
-{
-	size_t i;
-	int ret;
-
-	for (i = 0; i < interfaces->count; i++) {
-		ret = cb(interfaces->iface[i], ctx);
-		if (ret)
-			return ret;
-	}
-
-	return 0;
-}
+static struct hapd_global global;
 
 
 #ifndef CONFIG_NO_HOSTAPD_LOGGER
@@ -246,6 +228,24 @@ static int hostapd_driver_init(struct hostapd_iface *iface)
 		b = NULL;
 
 	os_memset(&params, 0, sizeof(params));
+	for (i = 0; wpa_drivers[i]; i++) {
+		if (wpa_drivers[i] != hapd->driver)
+			continue;
+
+		if (global.drv_priv[i] == NULL &&
+		    wpa_drivers[i]->global_init) {
+			global.drv_priv[i] = wpa_drivers[i]->global_init();
+			if (global.drv_priv[i] == NULL) {
+				wpa_printf(MSG_ERROR, "Failed to initialize "
+					   "driver '%s'",
+					   wpa_drivers[i]->name);
+				return -1;
+			}
+		}
+
+		params.global_priv = global.drv_priv[i];
+		break;
+	}
 	params.bssid = b;
 	params.ifname = hapd->conf->iface;
 	params.ssid = (const u8 *) hapd->conf->ssid.ssid;
@@ -275,8 +275,10 @@ static int hostapd_driver_init(struct hostapd_iface *iface)
 	}
 
 	if (hapd->driver->get_capa &&
-	    hapd->driver->get_capa(hapd->drv_priv, &capa) == 0)
+	    hapd->driver->get_capa(hapd->drv_priv, &capa) == 0) {
 		iface->drv_flags = capa.flags;
+		iface->probe_resp_offloads = capa.probe_resp_offloads;
+	}
 
 	return 0;
 }
@@ -291,7 +293,7 @@ static void hostapd_interface_deinit_free(struct hostapd_iface *iface)
 	driver = iface->bss[0]->driver;
 	drv_priv = iface->bss[0]->drv_priv;
 	hostapd_interface_deinit(iface);
-	if (driver && driver->hapd_deinit)
+	if (driver && driver->hapd_deinit && drv_priv)
 		driver->hapd_deinit(drv_priv);
 	hostapd_interface_free(iface);
 }
@@ -315,10 +317,13 @@ hostapd_interface_init(struct hapd_interfaces *interfaces,
 			iface->bss[0]->conf->logger_stdout_level--;
 	}
 
-	if (hostapd_driver_init(iface) ||
-	    hostapd_setup_interface(iface)) {
-		hostapd_interface_deinit_free(iface);
-		return NULL;
+	if (iface->conf->bss[0].iface[0] != 0 ||
+	    hostapd_drv_none(iface->bss[0])) {
+		if (hostapd_driver_init(iface) ||
+			hostapd_setup_interface(iface)) {
+			hostapd_interface_deinit_free(iface);
+			return NULL;
+		}
 	}
 
 	return iface;
@@ -372,6 +377,10 @@ static void handle_dump_state(int sig, void *signal_ctx)
 static int hostapd_global_init(struct hapd_interfaces *interfaces,
 			       const char *entropy_file)
 {
+	int i;
+
+	os_memset(&global, 0, sizeof(global));
+
 	hostapd_logger_register_cb(hostapd_logger_cb);
 
 	if (eap_server_register_methods()) {
@@ -396,12 +405,32 @@ static int hostapd_global_init(struct hapd_interfaces *interfaces,
 	openlog("hostapd", 0, LOG_DAEMON);
 #endif /* CONFIG_NATIVE_WINDOWS */
 
+	for (i = 0; wpa_drivers[i]; i++)
+		global.drv_count++;
+	if (global.drv_count == 0) {
+		wpa_printf(MSG_ERROR, "No drivers enabled");
+		return -1;
+	}
+	global.drv_priv = os_zalloc(global.drv_count * sizeof(void *));
+	if (global.drv_priv == NULL)
+		return -1;
+
 	return 0;
 }
 
 
 static void hostapd_global_deinit(const char *pid_file)
 {
+	int i;
+
+	for (i = 0; wpa_drivers[i] && global.drv_priv; i++) {
+		if (!global.drv_priv[i])
+			continue;
+		wpa_drivers[i]->global_deinit(global.drv_priv[i]);
+	}
+	os_free(global.drv_priv);
+	global.drv_priv = NULL;
+
 #ifdef EAP_SERVER_TNC
 	tncs_global_deinit();
 #endif /* EAP_SERVER_TNC */
@@ -459,7 +488,7 @@ static void show_version(void)
 		"hostapd v" VERSION_STR "\n"
 		"User space daemon for IEEE 802.11 AP management,\n"
 		"IEEE 802.1X/WPA/WPA2/EAP/RADIUS Authenticator\n"
-		"Copyright (c) 2002-2011, Jouni Malinen <j@w1.fi> "
+		"Copyright (c) 2002-2012, Jouni Malinen <j@w1.fi> "
 		"and contributors\n");
 }
 

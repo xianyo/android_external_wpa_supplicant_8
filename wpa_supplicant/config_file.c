@@ -2,14 +2,8 @@
  * WPA Supplicant / Configuration backend: text file
  * Copyright (c) 2003-2008, Jouni Malinen <j@w1.fi>
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
- *
- * Alternatively, this software may be distributed under the terms of BSD
- * license.
- *
- * See README and COPYING for more details.
+ * This software may be distributed under the terms of the BSD license.
+ * See README for more details.
  *
  * This file implements a configuration backend for text files. All the
  * configuration information is stored in a text file that uses a format
@@ -104,9 +98,7 @@ static int wpa_config_validate_network(struct wpa_ssid *ssid, int line)
 		wpa_config_update_psk(ssid);
 	}
 
-	if ((ssid->key_mgmt & (WPA_KEY_MGMT_PSK | WPA_KEY_MGMT_FT_PSK |
-			       WPA_KEY_MGMT_PSK_SHA256)) &&
-	    !ssid->psk_set) {
+	if (wpa_key_mgmt_wpa_psk(ssid->key_mgmt) && !ssid->psk_set) {
 		wpa_printf(MSG_ERROR, "Line %d: WPA-PSK accepted for key "
 			   "management, but no PSK configured.", line);
 		errors++;
@@ -183,6 +175,61 @@ static struct wpa_ssid * wpa_config_read_network(FILE *f, int *line, int id)
 	}
 
 	return ssid;
+}
+
+
+static struct wpa_cred * wpa_config_read_cred(FILE *f, int *line, int id)
+{
+	struct wpa_cred *cred;
+	int errors = 0, end = 0;
+	char buf[256], *pos, *pos2;
+
+	wpa_printf(MSG_MSGDUMP, "Line: %d - start of a new cred block", *line);
+	cred = os_zalloc(sizeof(*cred));
+	if (cred == NULL)
+		return NULL;
+	cred->id = id;
+
+	while (wpa_config_get_line(buf, sizeof(buf), f, line, &pos)) {
+		if (os_strcmp(pos, "}") == 0) {
+			end = 1;
+			break;
+		}
+
+		pos2 = os_strchr(pos, '=');
+		if (pos2 == NULL) {
+			wpa_printf(MSG_ERROR, "Line %d: Invalid cred line "
+				   "'%s'.", *line, pos);
+			errors++;
+			continue;
+		}
+
+		*pos2++ = '\0';
+		if (*pos2 == '"') {
+			if (os_strchr(pos2 + 1, '"') == NULL) {
+				wpa_printf(MSG_ERROR, "Line %d: invalid "
+					   "quotation '%s'.", *line, pos2);
+				errors++;
+				continue;
+			}
+		}
+
+		if (wpa_config_set_cred(cred, pos, pos2, *line) < 0)
+			errors++;
+	}
+
+	if (!end) {
+		wpa_printf(MSG_ERROR, "Line %d: cred block was not "
+			   "terminated properly.", *line);
+		errors++;
+	}
+
+	if (errors) {
+		wpa_config_free_cred(cred);
+		cred = NULL;
+	}
+
+	return cred;
 }
 
 
@@ -275,8 +322,10 @@ struct wpa_config * wpa_config_read(const char *name)
 	char buf[256], *pos;
 	int errors = 0, line = 0;
 	struct wpa_ssid *ssid, *tail = NULL, *head = NULL;
+	struct wpa_cred *cred, *cred_tail = NULL, *cred_head = NULL;
 	struct wpa_config *config;
 	int id = 0;
+	int cred_id = 0;
 
 	config = wpa_config_alloc_empty(NULL, NULL);
 	if (config == NULL)
@@ -310,6 +359,20 @@ struct wpa_config * wpa_config_read(const char *name)
 				errors++;
 				continue;
 			}
+		} else if (os_strcmp(pos, "cred={") == 0) {
+			cred = wpa_config_read_cred(f, &line, cred_id++);
+			if (cred == NULL) {
+				wpa_printf(MSG_ERROR, "Line %d: failed to "
+					   "parse cred block.", line);
+				errors++;
+				continue;
+			}
+			if (cred_head == NULL) {
+				cred_head = cred_tail = cred;
+			} else {
+				cred_tail->next = cred;
+				cred_tail = cred;
+			}
 #ifndef CONFIG_NO_CONFIG_BLOBS
 		} else if (os_strncmp(pos, "blob-base64-", 12) == 0) {
 			if (wpa_config_process_blob(config, f, &line, pos + 12)
@@ -330,6 +393,7 @@ struct wpa_config * wpa_config_read(const char *name)
 
 	config->ssid = head;
 	wpa_config_debug_dump_networks(config);
+	config->cred = cred_head;
 
 #ifndef WPA_IGNORE_CONFIG_ERRORS
 	if (errors) {
@@ -495,6 +559,18 @@ static void write_wep_key(FILE *f, int idx, struct wpa_ssid *ssid)
 }
 
 
+#ifdef CONFIG_P2P
+static void write_p2p_client_list(FILE *f, struct wpa_ssid *ssid)
+{
+	char *value = wpa_config_get(ssid, "p2p_client_list");
+	if (value == NULL)
+		return;
+	fprintf(f, "\tp2p_client_list=%s\n", value);
+	os_free(value);
+}
+#endif /* CONFIG_P2P */
+
+
 static void wpa_config_write_network(FILE *f, struct wpa_ssid *ssid)
 {
 	int i;
@@ -569,10 +645,34 @@ static void wpa_config_write_network(FILE *f, struct wpa_ssid *ssid)
 	INT(ieee80211w);
 #endif /* CONFIG_IEEE80211W */
 	STR(id_str);
+#ifdef CONFIG_P2P
+	write_p2p_client_list(f, ssid);
+#endif /* CONFIG_P2P */
 
 #undef STR
 #undef INT
 #undef INT_DEF
+}
+
+
+static void wpa_config_write_cred(FILE *f, struct wpa_cred *cred)
+{
+	if (cred->priority)
+		fprintf(f, "\tpriority=%d\n", cred->priority);
+	if (cred->realm)
+		fprintf(f, "\trealm=\"%s\"\n", cred->realm);
+	if (cred->username)
+		fprintf(f, "\tusername=\"%s\"\n", cred->username);
+	if (cred->password)
+		fprintf(f, "\tpassword=\"%s\"\n", cred->password);
+	if (cred->ca_cert)
+		fprintf(f, "\tca_cert=\"%s\"\n", cred->ca_cert);
+	if (cred->imsi)
+		fprintf(f, "\timsi=\"%s\"\n", cred->imsi);
+	if (cred->milenage)
+		fprintf(f, "\tmilenage=\"%s\"\n", cred->milenage);
+	if (cred->domain)
+		fprintf(f, "\tdomain=\"%s\"\n", cred->domain);
 }
 
 
@@ -649,7 +749,8 @@ static void wpa_config_write_global(FILE *f, struct wpa_config *config)
 		char _buf[WPS_DEV_TYPE_BUFSIZE], *buf;
 		buf = wps_dev_type_bin2str(config->device_type,
 					   _buf, sizeof(_buf));
-		fprintf(f, "device_type=%s\n", buf);
+		if (os_strcmp(buf, "0-00000000-0") != 0)
+			fprintf(f, "device_type=%s\n", buf);
 	}
 	if (WPA_GET_BE32(config->os_version))
 		fprintf(f, "os_version=%08x\n",
@@ -703,6 +804,15 @@ static void wpa_config_write_global(FILE *f, struct wpa_config *config)
 		fprintf(f, "max_num_sta=%u\n", config->max_num_sta);
 	if (config->disassoc_low_ack)
 		fprintf(f, "disassoc_low_ack=%u\n", config->disassoc_low_ack);
+#ifdef CONFIG_INTERWORKING
+	if (config->interworking)
+		fprintf(f, "interworking=%u\n", config->interworking);
+	if (!is_zero_ether_addr(config->hessid))
+		fprintf(f, "hessid=" MACSTR "\n", MAC2STR(config->hessid));
+	if (config->access_network_type != DEFAULT_ACCESS_NETWORK_TYPE)
+		fprintf(f, "access_network_type=%d\n",
+			config->access_network_type);
+#endif /* CONFIG_INTERWORKING */
 }
 
 #endif /* CONFIG_NO_CONFIG_WRITE */
@@ -713,6 +823,7 @@ int wpa_config_write(const char *name, struct wpa_config *config)
 #ifndef CONFIG_NO_CONFIG_WRITE
 	FILE *f;
 	struct wpa_ssid *ssid;
+	struct wpa_cred *cred;
 #ifndef CONFIG_NO_CONFIG_BLOBS
 	struct wpa_config_blob *blob;
 #endif /* CONFIG_NO_CONFIG_BLOBS */
@@ -728,9 +839,18 @@ int wpa_config_write(const char *name, struct wpa_config *config)
 
 	wpa_config_write_global(f, config);
 
+	for (cred = config->cred; cred; cred = cred->next) {
+		fprintf(f, "\ncred={\n");
+		wpa_config_write_cred(f, cred);
+		fprintf(f, "}\n");
+	}
+
 	for (ssid = config->ssid; ssid; ssid = ssid->next) {
 		if (ssid->key_mgmt == WPA_KEY_MGMT_WPS || ssid->temporary)
 			continue; /* do not save temporary networks */
+		if (wpa_key_mgmt_wpa_psk(ssid->key_mgmt) && !ssid->psk_set &&
+		    !ssid->passphrase)
+			continue; /* do not save invalid network */
 		fprintf(f, "\nnetwork={\n");
 		wpa_config_write_network(f, ssid);
 		fprintf(f, "}\n");
