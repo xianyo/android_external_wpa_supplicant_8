@@ -145,6 +145,8 @@ static int wpa_supplicant_conf_ap(struct wpa_supplicant *wpa_s,
 	bss->ssid.ssid_len = ssid->ssid_len;
 	bss->ssid.ssid_set = 1;
 
+	bss->ignore_broadcast_ssid = ssid->ignore_broadcast_ssid;
+
 	if (ssid->auth_alg)
 		bss->auth_algs = ssid->auth_alg;
 
@@ -238,7 +240,10 @@ static int wpa_supplicant_conf_ap(struct wpa_supplicant *wpa_s,
 			      * configuration */
 #endif /* CONFIG_WPS2 */
 	bss->eap_server = 1;
-	bss->wps_state = 2;
+
+	if (!ssid->ignore_broadcast_ssid)
+		bss->wps_state = 2;
+
 	bss->ap_setup_locked = 2;
 	if (wpa_s->conf->config_methods)
 		bss->config_methods = os_strdup(wpa_s->conf->config_methods);
@@ -867,6 +872,26 @@ int ap_ctrl_iface_sta_next(struct wpa_supplicant *wpa_s, const char *txtaddr,
 		return -1;
 	return hostapd_ctrl_iface_sta_next(wpa_s->ap_iface->bss[0], txtaddr,
 					   buf, buflen);
+}
+
+
+int ap_ctrl_iface_sta_disassociate(struct wpa_supplicant *wpa_s,
+				   const char *txtaddr)
+{
+	if (wpa_s->ap_iface == NULL)
+		return -1;
+	return hostapd_ctrl_iface_disassociate(wpa_s->ap_iface->bss[0],
+					       txtaddr);
+}
+
+
+int ap_ctrl_iface_sta_deauthenticate(struct wpa_supplicant *wpa_s,
+				     const char *txtaddr)
+{
+	if (wpa_s->ap_iface == NULL)
+		return -1;
+	return hostapd_ctrl_iface_deauthenticate(wpa_s->ap_iface->bss[0],
+						 txtaddr);
 }
 
 

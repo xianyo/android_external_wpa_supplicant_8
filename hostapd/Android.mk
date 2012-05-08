@@ -8,10 +8,12 @@ endif
 
 ifeq ($(WPA_BUILD_HOSTAPD),true)
 
-include $(LOCAL_PATH)/.config
+include $(LOCAL_PATH)/android.config
 
 # To ignore possible wrong network configurations
 L_CFLAGS = -DWPA_IGNORE_CONFIG_ERRORS
+
+L_CFLAGS += -DVERSION_STR_POSTFIX=\"-$(PLATFORM_VERSION)\"
 
 # Set Android log name
 L_CFLAGS += -DANDROID_LOG_NAME=\"hostapd\"

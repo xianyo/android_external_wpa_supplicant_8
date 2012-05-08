@@ -291,6 +291,8 @@ struct wpa_supplicant {
 	u8 *bssid_filter;
 	size_t bssid_filter_count;
 
+	enum { WPA_SETBAND_AUTO, WPA_SETBAND_5G, WPA_SETBAND_2G } setband;
+
 	/* previous scan was wildcard when interleaving between
 	 * wildcard scans and specific SSID scan when max_ssids=1 */
 	int prev_scan_wildcard;
@@ -334,6 +336,10 @@ struct wpa_supplicant {
 			     * previous association event */
 
 	struct scard_data *scard;
+#ifdef PCSC_FUNCS
+	char imsi[20];
+	int mnc_len;
+#endif /* PCSC_FUNCS */
 
 	unsigned char last_eapol_src[ETH_ALEN];
 
@@ -582,6 +588,7 @@ int wpa_supplicant_set_bss_expiration_count(struct wpa_supplicant *wpa_s,
 int wpa_supplicant_set_debug_params(struct wpa_global *global,
 				    int debug_level, int debug_timestamp,
 				    int debug_show_keys);
+void free_hw_features(struct wpa_supplicant *wpa_s);
 
 void wpa_show_license(void);
 

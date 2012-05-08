@@ -151,14 +151,14 @@ u16 p2p_get_provisioning_info(struct p2p_data *p2p, const u8 *addr)
 }
 
 
-void p2p_clear_provisioning_info(struct p2p_data *p2p, const u8 *iface_addr)
+void p2p_clear_provisioning_info(struct p2p_data *p2p, const u8 *addr)
 {
 	struct p2p_device *dev = NULL;
 
-	if (!iface_addr || !p2p)
+	if (!addr || !p2p)
 		return;
 
-	dev = p2p_get_device_interface(p2p, iface_addr);
+	dev = p2p_get_device(p2p, addr);
 	if (dev)
 		dev->wps_prov_info = 0;
 }
@@ -775,6 +775,7 @@ static void p2p_search(struct p2p_data *p2p)
 {
 	int freq = 0;
 	enum p2p_scan_type type;
+	u16 pw_id = DEV_PW_DEFAULT;
 
 	if (p2p->drv_in_listen) {
 		wpa_msg(p2p->cfg->msg_ctx, MSG_DEBUG, "P2P: Driver is still "
@@ -795,6 +796,9 @@ static void p2p_search(struct p2p_data *p2p)
 		type = P2P_SCAN_SPECIFIC;
 		wpa_msg(p2p->cfg->msg_ctx, MSG_DEBUG, "P2P: Starting search "
 			"for freq %u (GO Neg)", freq);
+
+		/* Advertise immediate availability of WPS credential */
+		pw_id = p2p_wps_method_pw_id(p2p->go_neg_peer->wps_method);
 	} else if (p2p->invite_peer) {
 		/*
 		 * Only scan the known listen frequency of the peer
@@ -818,7 +822,7 @@ static void p2p_search(struct p2p_data *p2p)
 
 	if (p2p->cfg->p2p_scan(p2p->cfg->cb_ctx, type, freq,
 			       p2p->num_req_dev_types, p2p->req_dev_types,
-			       p2p->find_dev_id)) {
+			       p2p->find_dev_id, pw_id)) {
 		wpa_msg(p2p->cfg->msg_ctx, MSG_DEBUG,
 			"P2P: Scan request failed");
 		p2p_continue_find(p2p);
@@ -962,12 +966,14 @@ int p2p_find(struct p2p_data *p2p, unsigned int timeout,
 	case P2P_FIND_PROGRESSIVE:
 		res = p2p->cfg->p2p_scan(p2p->cfg->cb_ctx, P2P_SCAN_FULL, 0,
 					 p2p->num_req_dev_types,
-					 p2p->req_dev_types, dev_id);
+					 p2p->req_dev_types, dev_id,
+					 DEV_PW_DEFAULT);
 		break;
 	case P2P_FIND_ONLY_SOCIAL:
 		res = p2p->cfg->p2p_scan(p2p->cfg->cb_ctx, P2P_SCAN_SOCIAL, 0,
 					 p2p->num_req_dev_types,
-					 p2p->req_dev_types, dev_id);
+					 p2p->req_dev_types, dev_id,
+					 DEV_PW_DEFAULT);
 		break;
 	default:
 		return -1;
@@ -1024,10 +1030,20 @@ void p2p_stop_find_for_freq(struct p2p_data *p2p, int freq)
 	p2p->go_neg_peer = NULL;
 	p2p->sd_peer = NULL;
 	p2p->invite_peer = NULL;
+	p2p_stop_listen_for_freq(p2p, freq);
+}
+
+
+void p2p_stop_listen_for_freq(struct p2p_data *p2p, int freq)
+{
 	if (freq > 0 && p2p->drv_in_listen == freq && p2p->in_listen) {
 		wpa_msg(p2p->cfg->msg_ctx, MSG_DEBUG, "P2P: Skip stop_listen "
 			"since we are on correct channel for response");
 		return;
+	}
+	if (p2p->in_listen) {
+		p2p->in_listen = 0;
+		p2p_clear_timeout(p2p);
 	}
 	if (p2p->drv_in_listen) {
 		/*
@@ -1755,12 +1771,18 @@ struct wpabuf * p2p_build_probe_resp_ies(struct p2p_data *p2p)
 {
 	struct wpabuf *buf;
 	u8 *len;
+	int pw_id = -1;
 
 	buf = wpabuf_alloc(1000);
 	if (buf == NULL)
 		return NULL;
 
-	p2p_build_wps_ie(p2p, buf, DEV_PW_DEFAULT, 1);
+	if (p2p->go_neg_peer) {
+		/* Advertise immediate availability of WPS credential */
+		pw_id = p2p_wps_method_pw_id(p2p->go_neg_peer->wps_method);
+	}
+
+	p2p_build_wps_ie(p2p, buf, pw_id, 1);
 
 	/* P2P IE */
 	len = p2p_buf_add_ie_hdr(buf);
@@ -2094,6 +2116,7 @@ int p2p_parse_dev_addr(const u8 *ies, size_t ies_len, u8 *dev_addr)
 {
 	struct wpabuf *p2p_ie;
 	struct p2p_message msg;
+	int ret = -1;
 
 	p2p_ie = ieee802_11_vendor_ie_concat(ies, ies_len,
 					     P2P_IE_VENDOR_TYPE);
@@ -2105,14 +2128,16 @@ int p2p_parse_dev_addr(const u8 *ies, size_t ies_len, u8 *dev_addr)
 		return -1;
 	}
 
-	if (msg.p2p_device_addr == NULL) {
-		wpabuf_free(p2p_ie);
-		return -1;
+	if (msg.p2p_device_addr) {
+		os_memcpy(dev_addr, msg.p2p_device_addr, ETH_ALEN);
+		ret = 0;
+	} else if (msg.device_id) {
+		os_memcpy(dev_addr, msg.device_id, ETH_ALEN);
+		ret = 0;
 	}
 
-	os_memcpy(dev_addr, msg.p2p_device_addr, ETH_ALEN);
 	wpabuf_free(p2p_ie);
-	return 0;
+	return ret;
 }
 
 
@@ -2235,11 +2260,7 @@ void p2p_deinit(struct p2p_data *p2p)
 void p2p_flush(struct p2p_data *p2p)
 {
 	struct p2p_device *dev, *prev;
-	p2p_clear_timeout(p2p);
-	p2p_set_state(p2p, P2P_IDLE);
-	p2p->start_after_scan = P2P_AFTER_SCAN_NOTHING;
-	p2p->go_neg_peer = NULL;
-	eloop_cancel_timeout(p2p_find_timeout, p2p, NULL);
+	p2p_stop_find(p2p);
 	dl_list_for_each_safe(dev, prev, &p2p->devices, struct p2p_device,
 			      list) {
 		dl_list_del(&dev->list);

@@ -267,7 +267,7 @@ int wpa_supplicant_scard_init(struct wpa_supplicant *wpa_s,
 	else
 		type = SCARD_GSM_SIM_ONLY;
 
-	wpa_s->scard = scard_init(type);
+	wpa_s->scard = scard_init(type, NULL);
 	if (wpa_s->scard == NULL) {
 		wpa_msg(wpa_s, MSG_WARNING, "Failed to initialize SIM "
 			"(pcsc-lite)");
@@ -952,7 +952,7 @@ static int wpa_supplicant_need_to_roam(struct wpa_supplicant *wpa_s,
 	if (!current_bss)
 		return 1; /* current BSS not seen in scan results */
 
-#ifdef CONFIG_ROAMING
+#ifndef CONFIG_NO_ROAMING
 	wpa_dbg(wpa_s, MSG_DEBUG, "Considering within-ESS reassociation");
 	wpa_dbg(wpa_s, MSG_DEBUG, "Current BSS: " MACSTR " level=%d",
 		MAC2STR(current_bss->bssid), current_bss->level);
@@ -987,9 +987,9 @@ static int wpa_supplicant_need_to_roam(struct wpa_supplicant *wpa_s,
 	}
 
 	return 1;
-#else
+#else /* CONFIG_NO_ROAMING */
 	return 0;
-#endif
+#endif /* CONFIG_NO_ROAMING */
 }
 
 
@@ -1660,9 +1660,13 @@ static void wpa_supplicant_event_disassoc(struct wpa_supplicant *wpa_s,
 	if (wpa_s->wpa_state >= WPA_AUTHENTICATING)
 		wpas_connection_failed(wpa_s, bssid);
 	wpa_sm_notify_disassoc(wpa_s->wpa);
-	wpa_msg(wpa_s, MSG_INFO, WPA_EVENT_DISCONNECTED "bssid=" MACSTR
-		" reason=%d",
-		MAC2STR(bssid), reason_code);
+	if (!is_zero_ether_addr(bssid) ||
+	    wpa_s->wpa_state >= WPA_AUTHENTICATING) {
+		wpa_msg(wpa_s, MSG_INFO, WPA_EVENT_DISCONNECTED "bssid=" MACSTR
+			" reason=%d%s",
+			MAC2STR(bssid), reason_code,
+			locally_generated ? " locally_generated=1" : "");
+	}
 	if (wpa_supplicant_dynamic_keys(wpa_s)) {
 		wpa_dbg(wpa_s, MSG_DEBUG, "Disconnect event - remove keys");
 		wpa_s->keys_cleared = 0;
@@ -2536,6 +2540,11 @@ void wpa_supplicant_event(void *ctx, enum wpa_event_type event,
 	case EVENT_CHANNEL_LIST_CHANGED:
 		if (wpa_s->drv_priv == NULL)
 			break; /* Ignore event during drv initialization */
+
+		free_hw_features(wpa_s);
+		wpa_s->hw.modes = wpa_drv_get_hw_feature_data(
+			wpa_s, &wpa_s->hw.num_modes, &wpa_s->hw.flags);
+
 #ifdef CONFIG_P2P
 		wpas_p2p_update_channel_list(wpa_s);
 #endif /* CONFIG_P2P */
