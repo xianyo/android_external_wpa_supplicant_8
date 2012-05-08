@@ -1,6 +1,6 @@
 /*
  * WPA Supplicant / Configuration file structures
- * Copyright (c) 2003-2005, Jouni Malinen <j@w1.fi>
+ * Copyright (c) 2003-2012, Jouni Malinen <j@w1.fi>
  *
  * This software may be distributed under the terms of the BSD license.
  * See README for more details.
@@ -61,6 +61,11 @@ struct wpa_cred {
 	int priority;
 
 	/**
+	 * pcsc - Use PC/SC and SIM/USIM card
+	 */
+	int pcsc;
+
+	/**
 	 * realm - Home Realm for Interworking
 	 */
 	char *realm;
@@ -79,6 +84,51 @@ struct wpa_cred {
 	 * ca_cert - CA certificate for Interworking network selection
 	 */
 	char *ca_cert;
+
+	/**
+	 * client_cert - File path to client certificate file (PEM/DER)
+	 *
+	 * This field is used with Interworking networking selection for a case
+	 * where client certificate/private key is used for authentication
+	 * (EAP-TLS). Full path to the file should be used since working
+	 * directory may change when wpa_supplicant is run in the background.
+	 *
+	 * Alternatively, a named configuration blob can be used by setting
+	 * this to blob://blob_name.
+	 */
+	char *client_cert;
+
+	/**
+	 * private_key - File path to client private key file (PEM/DER/PFX)
+	 *
+	 * When PKCS#12/PFX file (.p12/.pfx) is used, client_cert should be
+	 * commented out. Both the private key and certificate will be read
+	 * from the PKCS#12 file in this case. Full path to the file should be
+	 * used since working directory may change when wpa_supplicant is run
+	 * in the background.
+	 *
+	 * Windows certificate store can be used by leaving client_cert out and
+	 * configuring private_key in one of the following formats:
+	 *
+	 * cert://substring_to_match
+	 *
+	 * hash://certificate_thumbprint_in_hex
+	 *
+	 * For example: private_key="hash://63093aa9c47f56ae88334c7b65a4"
+	 *
+	 * Note that when running wpa_supplicant as an application, the user
+	 * certificate store (My user account) is used, whereas computer store
+	 * (Computer account) is used when running wpasvc as a service.
+	 *
+	 * Alternatively, a named configuration blob can be used by setting
+	 * this to blob://blob_name.
+	 */
+	char *private_key;
+
+	/**
+	 * private_key_passwd - Password for private key file
+	 */
+	char *private_key_passwd;
 
 	/**
 	 * imsi - IMSI in <MCC> | <MNC> | '-' | <MSIN> format
@@ -289,6 +339,23 @@ struct wpa_config {
 	 * module is not loaded.
 	 */
 	char *pkcs11_module_path;
+
+	/**
+	 * pcsc_reader - PC/SC reader name prefix
+	 *
+	 * If not %NULL, PC/SC reader with a name that matches this prefix is
+	 * initialized for SIM/USIM access. Empty string can be used to match
+	 * the first available reader.
+	 */
+	char *pcsc_reader;
+
+	/**
+	 * pcsc_pin - PIN for USIM, GSM SIM, and smartcards
+	 *
+	 * This field is used to configure PIN for SIM/USIM for EAP-SIM and
+	 * EAP-AKA. If left out, this will be asked through control interface.
+	 */
+	char *pcsc_pin;
 
 	/**
 	 * driver_param - Driver interface parameters

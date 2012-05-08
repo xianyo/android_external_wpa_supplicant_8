@@ -12,6 +12,7 @@
 #include "common/ieee802_11_defs.h"
 #include "common/gas.h"
 #include "common/wpa_ctrl.h"
+#include "utils/pcsc_funcs.h"
 #include "drivers/driver.h"
 #include "eap_common/eap_defs.h"
 #include "eap_peer/eap_methods.h"
@@ -417,6 +418,20 @@ static int nai_realm_cred_username(struct nai_realm_eap *eap)
 }
 
 
+static int nai_realm_cred_cert(struct nai_realm_eap *eap)
+{
+	if (eap_get_name(EAP_VENDOR_IETF, eap->method) == NULL)
+		return 0; /* method not supported */
+
+	if (eap->method != EAP_TYPE_TLS) {
+		/* Only EAP-TLS supported for credential authentication */
+		return 0;
+	}
+
+	return 1;
+}
+
+
 static struct nai_realm_eap * nai_realm_find_eap(struct wpa_cred *cred,
 						 struct nai_realm *realm)
 {
@@ -425,13 +440,19 @@ static struct nai_realm_eap * nai_realm_find_eap(struct wpa_cred *cred,
 	if (cred == NULL ||
 	    cred->username == NULL ||
 	    cred->username[0] == '\0' ||
-	    cred->password == NULL ||
-	    cred->password[0] == '\0')
+	    ((cred->password == NULL ||
+	      cred->password[0] == '\0') &&
+	     (cred->private_key == NULL ||
+	      cred->private_key[0] == '\0')))
 		return NULL;
 
 	for (e = 0; e < realm->eap_count; e++) {
 		struct nai_realm_eap *eap = &realm->eap[e];
-		if (nai_realm_cred_username(eap))
+		if (cred->password && cred->password[0] &&
+		    nai_realm_cred_username(eap))
+			return eap;
+		if (cred->private_key && cred->private_key[0] &&
+		    nai_realm_cred_cert(eap))
 			return eap;
 	}
 
@@ -441,21 +462,17 @@ static struct nai_realm_eap * nai_realm_find_eap(struct wpa_cred *cred,
 
 #ifdef INTERWORKING_3GPP
 
-static int plmn_id_match(struct wpabuf *anqp, const char *imsi)
+static int plmn_id_match(struct wpabuf *anqp, const char *imsi, int mnc_len)
 {
-	const char *sep;
 	u8 plmn[3];
 	const u8 *pos, *end;
 	u8 udhl;
 
-	sep = os_strchr(imsi, '-');
-	if (sep == NULL || (sep - imsi != 5 && sep - imsi != 6))
-		return 0;
-
 	/* See Annex A of 3GPP TS 24.234 v8.1.0 for description */
 	plmn[0] = (imsi[0] - '0') | ((imsi[1] - '0') << 4);
 	plmn[1] = imsi[2] - '0';
-	if (sep - imsi == 6)
+	/* default to MNC length 3 if unknown */
+	if (mnc_len != 2)
 		plmn[1] |= (imsi[5] - '0') << 4;
 	else
 		plmn[1] |= 0xf0;
@@ -582,10 +599,34 @@ static int interworking_connect_3gpp(struct wpa_supplicant *wpa_s,
 		return -1;
 
 	for (cred = wpa_s->conf->cred; cred; cred = cred->next) {
+		char *sep;
+		const char *imsi;
+		int mnc_len;
+
+#ifdef PCSC_FUNCS
+		if (cred->pcsc && wpa_s->conf->pcsc_reader && wpa_s->scard &&
+		    wpa_s->imsi[0]) {
+			imsi = wpa_s->imsi;
+			mnc_len = wpa_s->mnc_len;
+			goto compare;
+		}
+#endif /* PCSC_FUNCS */
+
 		if (cred->imsi == NULL || !cred->imsi[0] ||
 		    cred->milenage == NULL || !cred->milenage[0])
 			continue;
-		if (plmn_id_match(bss->anqp_3gpp, cred->imsi))
+
+		sep = os_strchr(cred->imsi, '-');
+		if (sep == NULL ||
+		    (sep - cred->imsi != 5 && sep - cred->imsi != 6))
+			continue;
+		mnc_len = sep - cred->imsi - 3;
+		imsi = cred->imsi;
+
+#ifdef PCSC_FUNCS
+	compare:
+#endif /* PCSC_FUNCS */
+		if (plmn_id_match(bss->anqp_3gpp, imsi, mnc_len))
 			break;
 	}
 	if (cred == NULL)
@@ -616,7 +657,9 @@ static int interworking_connect_3gpp(struct wpa_supplicant *wpa_s,
 		wpa_printf(MSG_DEBUG, "EAP-SIM not supported");
 		goto fail;
 	}
-	if (set_root_nai(ssid, cred->imsi, '1') < 0) {
+	if (cred->pcsc && wpa_s->scard && scard_supports_umts(wpa_s->scard))
+		wpa_config_set(ssid, "eap", "AKA", 0);
+	if (!cred->pcsc && set_root_nai(ssid, cred->imsi, '1') < 0) {
 		wpa_printf(MSG_DEBUG, "Failed to set Root NAI");
 		goto fail;
 	}
@@ -625,9 +668,12 @@ static int interworking_connect_3gpp(struct wpa_supplicant *wpa_s,
 		if (wpa_config_set_quoted(ssid, "password",
 					  cred->milenage) < 0)
 			goto fail;
-	} else {
-		/* TODO: PIN */
+	} else if (cred->pcsc) {
 		if (wpa_config_set_quoted(ssid, "pcsc", "") < 0)
+			goto fail;
+		if (wpa_s->conf->pcsc_pin &&
+		    wpa_config_set_quoted(ssid, "pin", wpa_s->conf->pcsc_pin)
+		    < 0)
 			goto fail;
 	}
 
@@ -757,6 +803,19 @@ int interworking_connect(struct wpa_supplicant *wpa_s, struct wpa_bss *bss)
 	    wpa_config_set_quoted(ssid, "password", cred->password) < 0)
 		goto fail;
 
+	if (cred->client_cert && cred->client_cert[0] &&
+	    wpa_config_set_quoted(ssid, "client_cert", cred->client_cert) < 0)
+		goto fail;
+
+	if (cred->private_key && cred->private_key[0] &&
+	    wpa_config_set_quoted(ssid, "private_key", cred->private_key) < 0)
+		goto fail;
+
+	if (cred->private_key_passwd && cred->private_key_passwd[0] &&
+	    wpa_config_set_quoted(ssid, "private_key_passwd",
+				  cred->private_key_passwd) < 0)
+		goto fail;
+
 	switch (eap->method) {
 	case EAP_TYPE_TTLS:
 		if (eap->inner_method) {
@@ -796,6 +855,8 @@ int interworking_connect(struct wpa_supplicant *wpa_s, struct wpa_bss *bss)
 		if (wpa_config_set(ssid, "phase2", buf, 0) < 0)
 			goto fail;
 		break;
+	case EAP_TYPE_TLS:
+		break;
 	}
 
 	if (cred->ca_cert && cred->ca_cert[0] &&
@@ -830,13 +891,36 @@ static struct wpa_cred * interworking_credentials_available_3gpp(
 		return NULL;
 
 	for (cred = wpa_s->conf->cred; cred; cred = cred->next) {
+		char *sep;
+		const char *imsi;
+		int mnc_len;
+
+#ifdef PCSC_FUNCS
+		if (cred->pcsc && wpa_s->conf->pcsc_reader && wpa_s->scard &&
+		    wpa_s->imsi[0]) {
+			imsi = wpa_s->imsi;
+			mnc_len = wpa_s->mnc_len;
+			goto compare;
+		}
+#endif /* PCSC_FUNCS */
+
 		if (cred->imsi == NULL || !cred->imsi[0] ||
 		    cred->milenage == NULL || !cred->milenage[0])
 			continue;
 
+		sep = os_strchr(cred->imsi, '-');
+		if (sep == NULL ||
+		    (sep - cred->imsi != 5 && sep - cred->imsi != 6))
+			continue;
+		mnc_len = sep - cred->imsi - 3;
+		imsi = cred->imsi;
+
+#ifdef PCSC_FUNCS
+	compare:
+#endif /* PCSC_FUNCS */
 		wpa_printf(MSG_DEBUG, "Interworking: Parsing 3GPP info from "
 			   MACSTR, MAC2STR(bss->bssid));
-		ret = plmn_id_match(bss->anqp_3gpp, cred->imsi);
+		ret = plmn_id_match(bss->anqp_3gpp, imsi, mnc_len);
 		wpa_printf(MSG_DEBUG, "PLMN match %sfound", ret ? "" : "not ");
 		if (ret) {
 			if (selected == NULL ||

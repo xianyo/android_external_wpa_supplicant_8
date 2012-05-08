@@ -2937,6 +2937,8 @@ static int p2p_ctrl_serv_disc_resp(struct wpa_supplicant *wpa_s, char *cmd)
 static int p2p_ctrl_serv_disc_external(struct wpa_supplicant *wpa_s,
 				       char *cmd)
 {
+	if (os_strcmp(cmd, "0") && os_strcmp(cmd, "1"))
+		return -1;
 	wpa_s->p2p_sd_over_ctrl_iface = atoi(cmd);
 	return 0;
 }
@@ -3635,7 +3637,26 @@ static int wpa_supplicant_driver_cmd(struct wpa_supplicant *wpa_s, char *cmd,
 		ret = pno_start(wpa_s);
 	else if (os_strcasecmp(cmd, "BGSCAN-STOP") == 0)
 		ret = pno_stop(wpa_s);
-	else
+	else if (os_strncasecmp(cmd, "SETBAND ", 8) == 0) {
+		int val = atoi(cmd + 8);
+		/*
+		 * Use driver_cmd for drivers that support it, but ignore the
+		 * return value since scan requests from wpa_supplicant will
+		 * provide a list of channels to scan for based on the SETBAND
+		 * setting.
+		 */
+		wpa_printf(MSG_DEBUG, "SETBAND: %d", val);
+		wpa_drv_driver_cmd(wpa_s, cmd, buf, buflen);
+		ret = 0;
+		if (val == 0)
+			wpa_s->setband = WPA_SETBAND_AUTO;
+		else if (val == 1)
+			wpa_s->setband = WPA_SETBAND_5G;
+		else if (val == 2)
+			wpa_s->setband = WPA_SETBAND_2G;
+		else
+			ret = -1;
+	} else
 		ret = wpa_drv_driver_cmd(wpa_s, cmd, buf, buflen);
 	if (ret == 0)
 		ret = sprintf(buf, "%s\n", "OK");
@@ -3959,13 +3980,20 @@ char * wpa_supplicant_ctrl_iface_process(struct wpa_supplicant *wpa_s,
 		wpa_supplicant_deauthenticate(wpa_s,
 					      WLAN_REASON_DEAUTH_LEAVING);
 	} else if (os_strcmp(buf, "SCAN") == 0) {
-		wpa_s->normal_scans = 0;
 		if (wpa_s->wpa_state == WPA_INTERFACE_DISABLED)
 			reply_len = -1;
 		else {
 			if (!wpa_s->scanning &&
 			    ((wpa_s->wpa_state <= WPA_SCANNING) ||
 			     (wpa_s->wpa_state == WPA_COMPLETED))) {
+				wpa_s->normal_scans = 0;
+				wpa_s->scan_req = 2;
+				wpa_supplicant_req_scan(wpa_s, 0, 0);
+			} else if (wpa_s->sched_scanning) {
+				wpa_printf(MSG_DEBUG, "Stop ongoing "
+					   "sched_scan to allow requested "
+					   "full scan to proceed");
+				wpa_supplicant_cancel_sched_scan(wpa_s);
 				wpa_s->scan_req = 2;
 				wpa_supplicant_req_scan(wpa_s, 0, 0);
 			} else {
@@ -4043,6 +4071,12 @@ char * wpa_supplicant_ctrl_iface_process(struct wpa_supplicant *wpa_s,
 	} else if (os_strncmp(buf, "STA-NEXT ", 9) == 0) {
 		reply_len = ap_ctrl_iface_sta_next(wpa_s, buf + 9, reply,
 						   reply_size);
+	} else if (os_strncmp(buf, "DEAUTHENTICATE ", 15) == 0) {
+		if (ap_ctrl_iface_sta_deauthenticate(wpa_s, buf + 15))
+			reply_len = -1;
+	} else if (os_strncmp(buf, "DISASSOCIATE ", 13) == 0) {
+		if (ap_ctrl_iface_sta_disassociate(wpa_s, buf + 13))
+			reply_len = -1;
 #endif /* CONFIG_AP */
 	} else if (os_strcmp(buf, "SUSPEND") == 0) {
 		wpas_notify_suspend(wpa_s->global);

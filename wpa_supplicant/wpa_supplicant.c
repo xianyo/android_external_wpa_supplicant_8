@@ -348,7 +348,7 @@ void wpa_supplicant_set_non_wpa_policy(struct wpa_supplicant *wpa_s,
 }
 
 
-static void free_hw_features(struct wpa_supplicant *wpa_s)
+void free_hw_features(struct wpa_supplicant *wpa_s)
 {
 	int i;
 	if (wpa_s->hw.modes == NULL)
@@ -1507,10 +1507,15 @@ void wpa_supplicant_disassociate(struct wpa_supplicant *wpa_s,
 				 int reason_code)
 {
 	u8 *addr = NULL;
+	union wpa_event_data event;
 
 	if (!is_zero_ether_addr(wpa_s->bssid)) {
 		wpa_drv_disassociate(wpa_s, wpa_s->bssid, reason_code);
 		addr = wpa_s->bssid;
+		os_memset(&event, 0, sizeof(event));
+		event.disassoc_info.reason_code = (u16) reason_code;
+		event.disassoc_info.locally_generated = 1;
+		wpa_supplicant_event(wpa_s, EVENT_DISASSOC, &event);
 	}
 
 	wpa_supplicant_clear_connection(wpa_s, addr);
@@ -1529,10 +1534,15 @@ void wpa_supplicant_deauthenticate(struct wpa_supplicant *wpa_s,
 				   int reason_code)
 {
 	u8 *addr = NULL;
+	union wpa_event_data event;
 
 	if (!is_zero_ether_addr(wpa_s->bssid)) {
 		wpa_drv_deauthenticate(wpa_s, wpa_s->bssid, reason_code);
 		addr = wpa_s->bssid;
+		os_memset(&event, 0, sizeof(event));
+		event.deauth_info.reason_code = (u16) reason_code;
+		event.deauth_info.locally_generated = 1;
+		wpa_supplicant_event(wpa_s, EVENT_DEAUTH, &event);
 	}
 
 	wpa_supplicant_clear_connection(wpa_s, addr);
@@ -2084,6 +2094,31 @@ int wpa_supplicant_update_mac_addr(struct wpa_supplicant *wpa_s)
 }
 
 
+static void wpa_supplicant_rx_eapol_bridge(void *ctx, const u8 *src_addr,
+					   const u8 *buf, size_t len)
+{
+	struct wpa_supplicant *wpa_s = ctx;
+	const struct l2_ethhdr *eth;
+
+	if (len < sizeof(*eth))
+		return;
+	eth = (const struct l2_ethhdr *) buf;
+
+	if (os_memcmp(eth->h_dest, wpa_s->own_addr, ETH_ALEN) != 0 &&
+	    !(eth->h_dest[0] & 0x01)) {
+		wpa_dbg(wpa_s, MSG_DEBUG, "RX EAPOL from " MACSTR " to " MACSTR
+			" (bridge - not for this interface - ignore)",
+			MAC2STR(src_addr), MAC2STR(eth->h_dest));
+		return;
+	}
+
+	wpa_dbg(wpa_s, MSG_DEBUG, "RX EAPOL from " MACSTR " to " MACSTR
+		" (bridge)", MAC2STR(src_addr), MAC2STR(eth->h_dest));
+	wpa_supplicant_rx_eapol(wpa_s, src_addr, buf + sizeof(*eth),
+				len - sizeof(*eth));
+}
+
+
 /**
  * wpa_supplicant_driver_init - Initialize driver interface parameters
  * @wpa_s: Pointer to wpa_supplicant data
@@ -2106,8 +2141,8 @@ int wpa_supplicant_driver_init(struct wpa_supplicant *wpa_s)
 		wpa_s->l2_br = l2_packet_init(wpa_s->bridge_ifname,
 					      wpa_s->own_addr,
 					      ETH_P_EAPOL,
-					      wpa_supplicant_rx_eapol, wpa_s,
-					      0);
+					      wpa_supplicant_rx_eapol_bridge,
+					      wpa_s, 1);
 		if (wpa_s->l2_br == NULL) {
 			wpa_msg(wpa_s, MSG_ERROR, "Failed to open l2_packet "
 				"connection for the bridge interface '%s'",
@@ -2342,6 +2377,48 @@ void wpa_supplicant_apply_ht_overrides(
 #endif /* CONFIG_HT_OVERRIDES */
 
 
+static int pcsc_reader_init(struct wpa_supplicant *wpa_s)
+{
+#ifdef PCSC_FUNCS
+	size_t len;
+
+	if (!wpa_s->conf->pcsc_reader)
+		return 0;
+
+	wpa_s->scard = scard_init(SCARD_TRY_BOTH, wpa_s->conf->pcsc_reader);
+	if (!wpa_s->scard)
+		return 1;
+
+	if (wpa_s->conf->pcsc_pin &&
+	    scard_set_pin(wpa_s->scard, wpa_s->conf->pcsc_pin) < 0) {
+		scard_deinit(wpa_s->scard);
+		wpa_s->scard = NULL;
+		wpa_msg(wpa_s, MSG_ERROR, "PC/SC PIN validation failed");
+		return -1;
+	}
+
+	len = sizeof(wpa_s->imsi) - 1;
+	if (scard_get_imsi(wpa_s->scard, wpa_s->imsi, &len)) {
+		scard_deinit(wpa_s->scard);
+		wpa_s->scard = NULL;
+		wpa_msg(wpa_s, MSG_ERROR, "Could not read IMSI");
+		return -1;
+	}
+	wpa_s->imsi[len] = '\0';
+
+	wpa_s->mnc_len = scard_get_mnc_len(wpa_s->scard);
+
+	wpa_printf(MSG_DEBUG, "SCARD: IMSI %s (MNC length %d)",
+		   wpa_s->imsi, wpa_s->mnc_len);
+
+	wpa_sm_set_scard_ctx(wpa_s->wpa, wpa_s->scard);
+	eapol_sm_register_scard_ctx(wpa_s->eapol, wpa_s->scard);
+#endif /* PCSC_FUNCS */
+
+	return 0;
+}
+
+
 static int wpa_supplicant_init_iface(struct wpa_supplicant *wpa_s,
 				     struct wpa_interface *iface)
 {
@@ -2561,6 +2638,9 @@ next_driver:
 #endif /* CONFIG_P2P */
 
 	if (wpa_bss_init(wpa_s) < 0)
+		return -1;
+
+	if (pcsc_reader_init(wpa_s) < 0)
 		return -1;
 
 	return 0;

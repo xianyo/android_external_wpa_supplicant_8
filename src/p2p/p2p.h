@@ -354,6 +354,7 @@ struct p2p_config {
 	 * @num_req_dev_types: Number of requested device types
 	 * @req_dev_types: Array containing requested device types
 	 * @dev_id: Device ID to search for or %NULL to find all devices
+	 * @pw_id: Device Password ID
 	 * Returns: 0 on success, -1 on failure
 	 *
 	 * This callback function is used to request a P2P scan or search
@@ -377,7 +378,7 @@ struct p2p_config {
 	 */
 	int (*p2p_scan)(void *ctx, enum p2p_scan_type type, int freq,
 			unsigned int num_req_dev_types,
-			const u8 *req_dev_types, const u8 *dev_id);
+			const u8 *req_dev_types, const u8 *dev_id, u16 pw_id);
 
 	/**
 	 * send_probe_resp - Transmit a Probe Response frame
@@ -1060,12 +1061,12 @@ u16 p2p_get_provisioning_info(struct p2p_data *p2p, const u8 *addr);
 /**
  * p2p_clear_provisioning_info - Clear any stored provisioning info
  * @p2p: P2P module context from p2p_init()
- * @iface_addr: Peer P2P Interface Address
+ * @iface_addr: Peer P2P Device Address
  *
  * This function is used to clear stored WPS provisioning info for the given
  * peer.
  */
-void p2p_clear_provisioning_info(struct p2p_data *p2p, const u8 *iface_addr);
+void p2p_clear_provisioning_info(struct p2p_data *p2p, const u8 *addr);
 
 
 /* Event notifications from lower layer driver operations */

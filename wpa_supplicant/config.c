@@ -1,6 +1,6 @@
 /*
  * WPA Supplicant / Configuration parser and common functions
- * Copyright (c) 2003-2008, Jouni Malinen <j@w1.fi>
+ * Copyright (c) 2003-2012, Jouni Malinen <j@w1.fi>
  *
  * This software may be distributed under the terms of the BSD license.
  * See README for more details.
@@ -1131,6 +1131,7 @@ static int wpa_config_parse_eap(const struct parse_data *data,
 
 	wpa_hexdump(MSG_MSGDUMP, "eap methods",
 		    (u8 *) methods, num_methods * sizeof(*methods));
+	os_free(ssid->eap.eap_methods);
 	ssid->eap.eap_methods = methods;
 	return errors ? -1 : 0;
 }
@@ -1625,6 +1626,7 @@ static const struct parse_data ssid_fields[] = {
 	{ INT_RANGE(frequency, 0, 10000) },
 	{ INT(wpa_ptk_rekey) },
 	{ STR(bgscan) },
+	{ INT_RANGE(ignore_broadcast_ssid, 0, 2) },
 #ifdef CONFIG_P2P
 	{ FUNC(p2p_client_list) },
 #endif /* CONFIG_P2P */
@@ -1826,6 +1828,9 @@ void wpa_config_free_cred(struct wpa_cred *cred)
 	os_free(cred->username);
 	os_free(cred->password);
 	os_free(cred->ca_cert);
+	os_free(cred->client_cert);
+	os_free(cred->private_key);
+	os_free(cred->private_key_passwd);
 	os_free(cred->imsi);
 	os_free(cred->milenage);
 	os_free(cred->domain);
@@ -1877,6 +1882,8 @@ void wpa_config_free(struct wpa_config *config)
 	os_free(config->opensc_engine_path);
 	os_free(config->pkcs11_engine_path);
 	os_free(config->pkcs11_module_path);
+	os_free(config->pcsc_reader);
+	os_free(config->pcsc_pin);
 	os_free(config->driver_param);
 	os_free(config->device_name);
 	os_free(config->manufacturer);
@@ -2268,6 +2275,11 @@ int wpa_config_set_cred(struct wpa_cred *cred, const char *var,
 		return 0;
 	}
 
+	if (os_strcmp(var, "pcsc") == 0) {
+		cred->pcsc = atoi(value);
+		return 0;
+	}
+
 	val = wpa_config_parse_string(value, &len);
 	if (val == NULL) {
 		wpa_printf(MSG_ERROR, "Line %d: invalid field '%s' string "
@@ -2296,6 +2308,24 @@ int wpa_config_set_cred(struct wpa_cred *cred, const char *var,
 	if (os_strcmp(var, "ca_cert") == 0) {
 		os_free(cred->ca_cert);
 		cred->ca_cert = val;
+		return 0;
+	}
+
+	if (os_strcmp(var, "client_cert") == 0) {
+		os_free(cred->client_cert);
+		cred->client_cert = val;
+		return 0;
+	}
+
+	if (os_strcmp(var, "private_key") == 0) {
+		os_free(cred->private_key);
+		cred->private_key = val;
+		return 0;
+	}
+
+	if (os_strcmp(var, "private_key_passwd") == 0) {
+		os_free(cred->private_key_passwd);
+		cred->private_key_passwd = val;
 		return 0;
 	}
 
@@ -2749,6 +2779,8 @@ static const struct global_parse_data global_fields[] = {
 	{ STR(opensc_engine_path), 0 },
 	{ STR(pkcs11_engine_path), 0 },
 	{ STR(pkcs11_module_path), 0 },
+	{ STR(pcsc_reader), 0 },
+	{ STR(pcsc_pin), 0 },
 	{ STR(driver_param), 0 },
 	{ INT(dot11RSNAConfigPMKLifetime), 0 },
 	{ INT(dot11RSNAConfigPMKReauthThreshold), 0 },
