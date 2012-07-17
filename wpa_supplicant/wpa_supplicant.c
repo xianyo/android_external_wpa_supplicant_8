@@ -1,7 +1,7 @@
 /*
  * WPA Supplicant
  * Copyright (c) 2003-2012, Jouni Malinen <j@w1.fi>
- *
+ * Copyright 2010-2012 Freescale Semiconductor, Inc.
  * This software may be distributed under the terms of the BSD license.
  * See README for more details.
  *
@@ -45,6 +45,7 @@
 #include "bss.h"
 #include "scan.h"
 #include "offchannel.h"
+#include "properties.h"
 
 const char *wpa_supplicant_version =
 "wpa_supplicant v" VERSION_STR "\n"
