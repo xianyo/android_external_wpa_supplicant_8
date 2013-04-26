@@ -36,7 +36,10 @@ L_CFLAGS += -DANDROID_LOG_NAME=\"wpa_supplicant\"
 
 ifdef CONFIG_DRIVER_NL80211
 $(warning NL80211 doesn't belong to Broadcom)
-# L_CFLAGS += -DANDROID_BRCM_P2P_PATCH
+ifeq ($(BOARD_WLAN_DEVICE),bcmdhd)
+$(warning but this __is__ Broadcom)
+L_CFLAGS += -DANDROID_BRCM_P2P_PATCH
+endif
 endif
 
 ifdef CONFIG_ROAMING
