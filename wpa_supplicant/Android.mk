@@ -1599,7 +1599,7 @@ include $(BUILD_EXECUTABLE)
 #include $(BUILD_EXECUTABLE)
 #
 ########################
-
+ifeq ($(WPA_SUPPLICANT_VERSION),$(filter $(WPA_SUPPLICANT_VERSION),VER_0_8_UNITE))
 local_target_dir := $(TARGET_OUT)/etc/wifi
 
 include $(CLEAR_VARS)
@@ -1608,7 +1608,7 @@ LOCAL_MODULE_CLASS := ETC
 LOCAL_MODULE_PATH := $(local_target_dir)
 LOCAL_SRC_FILES := $(LOCAL_MODULE)
 include $(BUILD_PREBUILT)
-
+endif
 ########################
 
 include $(CLEAR_VARS)
