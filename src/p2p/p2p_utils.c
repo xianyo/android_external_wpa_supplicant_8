@@ -247,7 +247,11 @@ int p2p_channels_includes_freq(const struct p2p_channels *channels,
 #ifdef ANDROID_P2P
 static int p2p_block_op_freq(unsigned int freq)
 {
+#ifdef REALTEK_WIFI_VENDOR
+    return 0;
+#else
 	return (freq >= 5170 && freq < 5745);
+#endif
 }
 
 
