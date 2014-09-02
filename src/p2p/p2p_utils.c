@@ -262,8 +262,13 @@ size_t p2p_copy_reg_class(struct p2p_reg_class *dc, struct p2p_reg_class *sc)
 	dc->reg_class = sc->reg_class;
 	dc->channels = 0;
 	for (i=0; i < sc->channels; i++) {
-		if (!p2p_block_op_freq(p2p_channel_to_freq(sc->reg_class,
-							   sc->channel[i]))) {
+#ifdef REALTEK_WIFI_VENDOR
+        if (p2p_channel_to_freq(sc->reg_class, sc->channel[i]) <=5170 &&
+            p2p_channel_to_freq(sc->reg_class, sc->channel[i]) >=2400 ) {
+#else
+        if (!p2p_block_op_freq(p2p_channel_to_freq(sc->reg_class,
+                                                sc->channel[i]))) {
+#endif
 			dc->channel[dc->channels] = sc->channel[i];
 			dc->channels++;
 		}
