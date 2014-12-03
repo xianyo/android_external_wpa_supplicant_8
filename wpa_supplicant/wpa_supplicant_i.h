@@ -1,6 +1,7 @@
 /*
  * wpa_supplicant - Internal definitions
  * Copyright (c) 2003-2012, Jouni Malinen <j@w1.fi>
+ * Copyright (C) 2014 Freescale Semiconductor, Inc.
  *
  * This software may be distributed under the terms of the BSD license.
  * See README for more details.
@@ -729,6 +730,9 @@ struct wpa_supplicant {
 #endif /* CONFIG_TESTING_GET_GTK */
 
 	unsigned int num_multichan_concurrent;
+#ifdef REALTEK_WIFI_VENDOR
+    u8 invited_peer[ETH_ALEN];
+#endif
 };
 
 

@@ -1,6 +1,7 @@
 /*
  * Wi-Fi Direct - P2P Invitation procedure
  * Copyright (c) 2010, Atheros Communications
+ * Copyright (C) 2014 Freescale Semiconductor, Inc.
  *
  * This software may be distributed under the terms of the BSD license.
  * See README for more details.
@@ -474,7 +475,9 @@ int p2p_invite_send(struct p2p_data *p2p, struct p2p_device *dev,
 		p2p_dbg(p2p, "Failed to send Action frame");
 		/* Use P2P find to recover and retry */
 		p2p_set_timeout(p2p, 0, 0);
-	}
+    } else {
+        dev->flags |= P2P_DEV_WAIT_INV_REQ_ACK;
+    }
 
 	wpabuf_free(req);
 
@@ -490,6 +493,9 @@ void p2p_invitation_req_cb(struct p2p_data *p2p, int success)
 		p2p_dbg(p2p, "No pending Invite");
 		return;
 	}
+
+   if (success)
+       p2p->invite_peer->flags &= ~P2P_DEV_WAIT_INV_REQ_ACK;
 
 	/*
 	 * Use P2P find, if needed, to find the other device from its listen

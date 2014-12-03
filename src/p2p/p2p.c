@@ -1,6 +1,7 @@
 /*
  * Wi-Fi Direct - P2P module
  * Copyright (c) 2009-2010, Atheros Communications
+ * Copyright (C) 2014 Freescale Semiconductor, Inc.
  *
  * This software may be distributed under the terms of the BSD license.
  * See README for more details.
@@ -2166,10 +2167,12 @@ p2p_probe_req_rx(struct p2p_data *p2p, const u8 *addr, const u8 *dst,
 
 	if ((p2p->state == P2P_INVITE || p2p->state == P2P_INVITE_LISTEN) &&
 	    p2p->invite_peer &&
+        (p2p->invite_peer->flags & P2P_DEV_WAIT_INV_REQ_ACK) &&
 	    os_memcmp(addr, p2p->invite_peer->info.p2p_device_addr, ETH_ALEN)
 	    == 0) {
 		/* Received a Probe Request from Invite peer */
 		p2p_dbg(p2p, "Found Invite peer - try to start Invite from timeout");
+        eloop_cancel_timeout(p2p_invite_start, p2p, NULL);
 		eloop_register_timeout(0, 0, p2p_invite_start, p2p, NULL);
 		return P2P_PREQ_PROCESSED;
 	}

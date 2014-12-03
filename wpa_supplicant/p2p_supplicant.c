@@ -1,6 +1,7 @@
 /*
  * wpa_supplicant - P2P
  * Copyright (c) 2009-2010, Atheros Communications
+ * Copyright (C) 2014 Freescale Semiconductor, Inc.
  *
  * This software may be distributed under the terms of the BSD license.
  * See README for more details.
@@ -5177,6 +5178,11 @@ int wpas_p2p_invite(struct wpa_supplicant *wpa_s, const u8 *peer_addr,
 	if (wpa_s->global->p2p_disabled || wpa_s->global->p2p == NULL)
 		return -1;
 
+#ifdef REALTEK_WIFI_VENDOR
+    os_memcpy(wpa_s->invited_peer, peer_addr, ETH_ALEN);
+
+#endif
+
 	return p2p_invite(wpa_s->global->p2p, peer_addr, role, bssid,
 			  ssid->ssid, ssid->ssid_len, force_freq, go_dev_addr,
 			  1, pref_freq);
@@ -5251,6 +5257,11 @@ int wpas_p2p_invite_group(struct wpa_supplicant *wpa_s, const char *ifname,
 		return res;
 	wpas_p2p_set_own_freq_preference(wpa_s, force_freq);
 
+#ifdef REALTEK_WIFI_VENDOR
+    os_memcpy(wpa_s->invited_peer, peer_addr, ETH_ALEN);
+
+#endif
+
 	return p2p_invite(wpa_s->global->p2p, peer_addr, role, bssid,
 			  ssid->ssid, ssid->ssid_len, force_freq,
 			  go_dev_addr, persistent, pref_freq);
@@ -5287,6 +5298,7 @@ void wpas_p2p_completed(struct wpa_supplicant *wpa_s)
      * but the full-zero go_dev_addr will be dangerous.
      * So we can try the bssid in wpa_s.
      */
+#ifdef REALTEK_WIFI_VENDOR
     int go_addr_valid = 0;
     int cc = 0;
     for (cc = 0; cc < ETH_ALEN; cc++) {
@@ -5297,9 +5309,10 @@ void wpas_p2p_completed(struct wpa_supplicant *wpa_s)
     }
     if (!go_addr_valid) {
         wpa_msg_global(wpa_s->parent, MSG_ERROR, "persistent group addr not valid, will try bssid:" MACSTR,
-                         MAC2STR(wpa_s->bssid));
-        os_memcpy(go_dev_addr, wpa_s->bssid, ETH_ALEN);
+                         MAC2STR(wpa_s->invited_peer));
+        os_memcpy(go_dev_addr, wpa_s->invited_peer, ETH_ALEN);
     }
+#endif
     os_memcpy(wpa_s->go_dev_addr, go_dev_addr, ETH_ALEN);
 
 	if (wpa_s->global->p2p_group_formation == wpa_s)
